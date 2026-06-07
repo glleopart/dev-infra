@@ -1,0 +1,53 @@
+{
+  "_readme": "Master MCP stack for ~/.dev-infra. Do not put real tokens here — use ${ENV_VAR} references. The install-mcp script reads this file and writes to the right location for each tool.",
+
+  "mcpServers": {
+
+    "github": {
+      "_why": "Create issues, open PRs, check CI status, read repo structure — without leaving the terminal session.",
+      "_requires": "GITHUB_TOKEN env var (personal access token with repo scope). Generate at github.com/settings/tokens.",
+      "command": "mcp-npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+
+    "filesystem": {
+      "_why": "Gives agents safe, sandboxed read/write access to your projects directory. Without this, agents can only see files passed to them explicitly.",
+      "_requires": "Nothing. The allowed paths are set in args — adjust PROJECTS_DIR to your actual projects folder.",
+      "command": "mcp-npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${PROJECTS_DIR}"
+      ],
+      "env": {}
+    },
+
+    "context7": {
+      "_why": "Pulls live, version-specific library documentation into context on demand. Eliminates the single biggest source of AI coding errors: stale API knowledge from training data.",
+      "_requires": "Nothing for free tier (rate-limited by IP). Optional: set CONTEXT7_API_KEY for higher limits — get one at context7.com/dashboard.",
+      "command": "mcp-npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "env": {}
+    },
+
+    "sequential-thinking": {
+      "_why": "Structures the orchestrator's multi-step reasoning. Instead of one-shot plans, the agent works through problems step-by-step, can revise previous steps, and branches when needed. Especially valuable for complex version planning.",
+      "_requires": "Nothing.",
+      "command": "mcp-npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "env": {}
+    },
+
+    "playwright": {
+      "_why": "Browser automation for end-to-end testing after each version. The orchestrator can spin up a browser, navigate to your dev server, and verify the acceptance criterion is visually met — without you having to do it manually every time.",
+      "_requires": "Node 18+. First run: npx playwright install chromium",
+      "command": "mcp-npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "env": {}
+    }
+
+  }
+}

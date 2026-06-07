@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Wrapper: Claude Code spawns bare subprocesses with no shell init,
+# so fnm's Node is never on PATH. This wrapper adds it explicitly.
+
+FNM_DIR="$HOME/.local/share/fnm"
+
+# 1. Make fnm binary itself available
+export PATH="$FNM_DIR:$PATH"
+
+# 2. Load fnm env (adds current default Node version to PATH)
+if command -v fnm &>/dev/null; then
+    eval "$(fnm env --shell bash 2>/dev/null)" || true
+fi
+
+# 3. Fallback: add default alias bin directly
+DEFAULT_BIN="$FNM_DIR/aliases/default/bin"
+[ -d "$DEFAULT_BIN" ] && export PATH="$DEFAULT_BIN:$PATH"
+
+# 4. Last resort: find any installed version
+if ! command -v npx &>/dev/null; then
+    for dir in "$FNM_DIR"/node-versions/*/installation/bin; do
+        [ -d "$dir" ] && export PATH="$dir:$PATH" && break
+    done
+fi
+
+exec npx "$@"

@@ -1,0 +1,226 @@
+#!/usr/bin/env zsh
+# new-project — bootstrap a new project with the dev infrastructure
+#
+# Usage:
+#   new-project myapp
+#   new-project myapp --no-git
+#   new-project myapp --from /path/to/existing/repo
+#
+# What it does:
+#   1. Creates the project directory (or uses an existing one)
+#   2. Copies scripts/ and templates/ from ~/.dev-infra/
+#   3. Creates docs/ with the right template files
+#   4. Generates PROJECT_MANIFEST.md from the codebase
+#   5. Initialises git (unless --no-git)
+#   6. Prints the Claude context block to paste into a new Claude project
+
+set -e
+
+# ── Resolve the infra root (where this script lives) ──────────────────────────
+INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
+
+if [[ ! -d "$INFRA_DIR" ]]; then
+  echo "ERROR: Dev infrastructure not found at $INFRA_DIR"
+  echo "  Set the DEV_INFRA_DIR env var or run the one-time setup first."
+  echo "  See: $INFRA_DIR/SETUP.md"
+  exit 1
+fi
+
+# ── Parse arguments ────────────────────────────────────────────────────────────
+PROJECT_NAME=""
+NO_GIT=false
+FROM_PATH=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-git)   NO_GIT=true; shift ;;
+    --from)     FROM_PATH="$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: new-project <name> [--no-git] [--from /existing/path]"
+      exit 0 ;;
+    *)
+      if [[ -z "$PROJECT_NAME" ]]; then
+        PROJECT_NAME="$1"
+      fi
+      shift ;;
+  esac
+done
+
+if [[ -z "$PROJECT_NAME" ]]; then
+  echo "Usage: new-project <project-name> [--no-git] [--from /existing/path]"
+  exit 1
+fi
+
+# ── Determine target directory ─────────────────────────────────────────────────
+if [[ -n "$FROM_PATH" ]]; then
+  TARGET="$FROM_PATH"
+  echo "\n→ Bootstrapping existing project at: $TARGET"
+else
+  TARGET="$(pwd)/$PROJECT_NAME"
+  if [[ -d "$TARGET" ]]; then
+    echo "Directory already exists: $TARGET"
+    echo -n "Add infrastructure to it? [y/N] "
+    read -r REPLY
+    [[ "$REPLY" != "y" && "$REPLY" != "Y" ]] && exit 0
+  else
+    mkdir -p "$TARGET"
+    echo "\n→ Created: $TARGET"
+  fi
+fi
+
+cd "$TARGET"
+
+# ── Copy scripts ───────────────────────────────────────────────────────────────
+echo "→ Installing scripts..."
+mkdir -p scripts
+cp "$INFRA_DIR/scripts/audit_pipeline.py"     scripts/
+cp "$INFRA_DIR/scripts/generate_manifest.py"  scripts/
+chmod +x scripts/audit_pipeline.py scripts/generate_manifest.py
+echo "  scripts/audit_pipeline.py"
+echo "  scripts/generate_manifest.py"
+
+# ── Copy templates into docs/ ──────────────────────────────────────────────────
+echo "→ Installing docs templates..."
+mkdir -p docs
+
+# Only copy if the file doesn't already exist (don't overwrite manual work)
+for tmpl in PROJECT_MANIFEST SESSION_HANDOFF AUDIT_PROMPTS VERSION_PLAN; do
+  src="$INFRA_DIR/templates/${tmpl}.md"
+  dst="docs/${tmpl}.md"
+  if [[ -f "$dst" ]]; then
+    echo "  docs/${tmpl}.md already exists — skipping"
+  else
+    cp "$src" "$dst"
+    echo "  docs/${tmpl}.md"
+  fi
+done
+
+# ── Create .env.example if missing ────────────────────────────────────────────
+if [[ ! -f ".env.example" ]]; then
+  cat > .env.example << 'EOF'
+# ── Environment variables ──────────────────────────────────────────
+# Copy this file to .env and fill in real values.
+# NEVER commit .env to version control.
+
+# Database
+DATABASE_URL=your-db-url-here
+
+# Auth
+SECRET_KEY=generate-with-python-secrets-token-urlsafe-32
+
+# AI (if applicable)
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Add your project-specific vars below
+EOF
+  echo "→ Created .env.example"
+fi
+
+# ── Create .gitignore if missing ───────────────────────────────────────────────
+if [[ ! -f ".gitignore" ]]; then
+  cat > .gitignore << 'EOF'
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+logs/
+EOF
+  echo "→ Created .gitignore"
+fi
+
+# ── Copy .mcp.json (project-level MCP config, safe to commit) ─────────────────
+MCP_TEMPLATE="$INFRA_DIR/mcp/.mcp.json.template"
+if [[ -f "$MCP_TEMPLATE" ]]; then
+  if [[ ! -f ".mcp.json" ]]; then
+    cp "$MCP_TEMPLATE" .mcp.json
+    echo "→ Created .mcp.json (project MCP config — safe to commit)"
+  else
+    echo "→ .mcp.json already exists — skipping"
+  fi
+fi
+
+# ── Generate initial manifest ──────────────────────────────────────────────────
+echo "→ Generating PROJECT_MANIFEST.md..."
+if command -v python3 &>/dev/null; then
+  python3 scripts/generate_manifest.py \
+    --root . \
+    --output docs/PROJECT_MANIFEST.md \
+    ${[[ -f "docs/PROJECT_MANIFEST.md" ]] && echo "--update" || echo ""} \
+    2>/dev/null && echo "  docs/PROJECT_MANIFEST.md updated" \
+    || echo "  (manifest generation skipped — run manually: python3 scripts/generate_manifest.py)"
+else
+  echo "  python3 not found — run manually: python3 scripts/generate_manifest.py"
+fi
+
+# ── Git init ───────────────────────────────────────────────────────────────────
+if [[ "$NO_GIT" == false ]] && [[ ! -d ".git" ]]; then
+  git init -q
+  git add -A
+  git commit -q -m "chore: bootstrap project with dev-infra" 2>/dev/null \
+    || echo "  (git commit skipped — configure git user first)"
+  echo "→ Git initialised"
+elif [[ -d ".git" ]]; then
+  echo "→ Git already initialised"
+fi
+
+# ── Done: print the Claude context block ──────────────────────────────────────
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Project ready: $TARGET"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  Next steps:"
+echo ""
+echo "  1. Open a new Claude project at claude.ai"
+echo "  2. Upload these 6 skill files in Project Settings → Skills:"
+echo "     $INFRA_DIR/skills/project-architect/SKILL.md"
+echo "     $INFRA_DIR/skills/build-orchestrator/SKILL.md"
+echo "     $INFRA_DIR/skills/audit-security/SKILL.md"
+echo "     $INFRA_DIR/skills/audit-parity/SKILL.md"
+echo "     $INFRA_DIR/skills/audit-quality/SKILL.md"
+echo "     $INFRA_DIR/skills/ml-integration/SKILL.md"
+echo ""
+echo "  3. Paste this as your first message in Claude:"
+echo ""
+echo "  ┌─────────────────────────────────────────────────────────"
+printf "  │ I want to build [describe your project in 1-2 sentences].\n"
+printf "  │ Tech: [languages/frameworks you want to use, or 'help me decide'].\n"
+printf "  │ Project root: %s\n" "$TARGET"
+printf "  │ Start with the project-architect skill.\n"
+echo "  └─────────────────────────────────────────────────────────"
+echo ""
+echo "  4. After planning, run the audit any time:"
+echo "     audit                          # from anywhere inside the project"
+echo "     audit --dry-run                # see which files will be sent"
+echo "     audit --threshold 90           # stricter pass bar"
+echo ""

@@ -1,0 +1,171 @@
+#!/usr/bin/env zsh
+# install-agents — install dev-infra agents globally for Claude Code and OpenCode
+#
+# Usage:
+#   install-agents                    # install for all detected tools
+#   install-agents --claude-code      # Claude Code only
+#   install-agents --opencode         # OpenCode only
+#   install-agents --list             # show what would be installed, no changes
+#   install-agents --uninstall        # remove installed agents
+#
+# Run this once on a new machine after placing ~/.dev-infra.
+# Safe to re-run — overwrites existing agents with the latest versions.
+
+set -e
+
+INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
+AGENTS_SRC="$INFRA_DIR/agents"
+
+# Install targets
+CLAUDE_CODE_DIR="$HOME/.claude/agents"
+OPENCODE_DIR="$HOME/.config/opencode/agents"
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+ok()   { echo "${GREEN}  ✓${NC} $1" }
+warn() { echo "${YELLOW}  !${NC} $1" }
+err()  { echo "${RED}  ✗${NC} $1" }
+hdr()  { echo "\n${GREEN}━━${NC} $1" }
+
+# ── Validate infra dir ────────────────────────────────────────────────────────
+if [[ ! -d "$AGENTS_SRC" ]]; then
+  err "Agents source not found at $AGENTS_SRC"
+  echo "  Make sure ~/.dev-infra/agents/ exists."
+  exit 1
+fi
+
+AGENT_FILES=("$AGENTS_SRC"/*.md)
+if [[ ${#AGENT_FILES[@]} -eq 0 ]]; then
+  err "No agent .md files found in $AGENTS_SRC"
+  exit 1
+fi
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+INSTALL_CLAUDE=true
+INSTALL_OPENCODE=true
+LIST_ONLY=false
+UNINSTALL=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --claude-code)  INSTALL_OPENCODE=false; shift ;;
+    --opencode)     INSTALL_CLAUDE=false; shift ;;
+    --list)         LIST_ONLY=true; shift ;;
+    --uninstall)    UNINSTALL=true; shift ;;
+    -h|--help)
+      echo "Usage: install-agents [--claude-code|--opencode|--list|--uninstall]"
+      exit 0 ;;
+    *) shift ;;
+  esac
+done
+
+# ── List mode ─────────────────────────────────────────────────────────────────
+if [[ "$LIST_ONLY" == true ]]; then
+  echo "\nAgents in $AGENTS_SRC:"
+  for f in "${AGENT_FILES[@]}"; do
+    name=$(basename "$f" .md)
+    # Extract description first line from frontmatter
+    desc=$(grep -A1 "^description:" "$f" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//' | cut -c1-60)
+    printf "  %-22s %s\n" "$name" "$desc"
+  done
+  echo "\nWould install to:"
+  [[ "$INSTALL_CLAUDE" == true ]] && echo "  Claude Code: $CLAUDE_CODE_DIR"
+  [[ "$INSTALL_OPENCODE" == true ]] && echo "  OpenCode:    $OPENCODE_DIR"
+  exit 0
+fi
+
+# ── Uninstall mode ────────────────────────────────────────────────────────────
+if [[ "$UNINSTALL" == true ]]; then
+  hdr "Uninstalling agents"
+  for f in "${AGENT_FILES[@]}"; do
+    name=$(basename "$f")
+    [[ "$INSTALL_CLAUDE" == true ]] && rm -f "$CLAUDE_CODE_DIR/$name" && ok "Removed Claude Code: $name"
+    [[ "$INSTALL_OPENCODE" == true ]] && rm -f "$OPENCODE_DIR/$name" && ok "Removed OpenCode: $name"
+  done
+  echo "\nDone. Re-run install-agents to restore."
+  exit 0
+fi
+
+# ── Install ───────────────────────────────────────────────────────────────────
+echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  install-agents"
+echo "  Source: $AGENTS_SRC"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── Claude Code install ───────────────────────────────────────────────────────
+if [[ "$INSTALL_CLAUDE" == true ]]; then
+  # Detect if Claude Code is installed
+  if command -v claude &>/dev/null || [[ -d "$HOME/.claude" ]]; then
+    hdr "Claude Code → $CLAUDE_CODE_DIR"
+    mkdir -p "$CLAUDE_CODE_DIR"
+
+    for f in "${AGENT_FILES[@]}"; do
+      name=$(basename "$f")
+      # Claude Code uses short model names — copy as-is
+      cp "$f" "$CLAUDE_CODE_DIR/$name"
+      ok "$name"
+    done
+  else
+    warn "Claude Code not detected (no 'claude' command or ~/.claude dir)"
+    warn "Skipping Claude Code install. Run 'install-agents --claude-code' after installing Claude Code."
+  fi
+fi
+
+# ── OpenCode install ──────────────────────────────────────────────────────────
+if [[ "$INSTALL_OPENCODE" == true ]]; then
+  # Detect if OpenCode is installed
+  if command -v opencode &>/dev/null || [[ -d "$HOME/.config/opencode" ]]; then
+    hdr "OpenCode → $OPENCODE_DIR"
+    mkdir -p "$OPENCODE_DIR"
+
+    for f in "${AGENT_FILES[@]}"; do
+      name=$(basename "$f")
+      # OpenCode needs 'anthropic/claude-X' model string format.
+      # Transform: 'model: claude-X' → 'model: anthropic/claude-X'
+      # The commented OpenCode model line in each file is the source of truth.
+      # We activate it and deactivate the Claude Code line.
+      sed \
+        -e 's/^model: claude-/model: anthropic\/claude-/' \
+        -e 's/^# model: anthropic\//model: anthropic\//' \
+        "$f" | \
+        # Remove the now-redundant duplicate model line if both exist
+        awk '
+          /^model:/ { if (seen_model++) next }
+          { print }
+        ' \
+        > "$OPENCODE_DIR/$name"
+      ok "$name"
+    done
+  else
+    warn "OpenCode not detected (no 'opencode' command or ~/.config/opencode dir)"
+    warn "Skipping OpenCode install. Run 'install-agents --opencode' after installing OpenCode."
+  fi
+fi
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Agents installed globally."
+echo ""
+echo "  These agents are now available in every project."
+echo ""
+echo "  In Claude Code:"
+echo "    /agents          — see all available agents"
+echo "    Use Task tool    — orchestrator delegates to other agents"
+echo ""
+echo "  In OpenCode:"
+echo "    @orchestrator    — activate the orchestrator agent"
+echo "    @builder         — activate the builder"
+echo "    @tutor           — activate the learning feedback agent"
+echo ""
+echo "  Per-project agents (override globals):"
+echo "    Place .md files in <project>/.claude/agents/    (Claude Code)"
+echo "    Place .md files in <project>/.opencode/agents/  (OpenCode)"
+echo ""
+echo "  To update after editing agents in ~/.dev-infra/agents/:"
+echo "    install-agents"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

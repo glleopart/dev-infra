@@ -1,0 +1,301 @@
+#!/usr/bin/env zsh
+# install-mcp — install the dev-infra MCP stack into Claude Code and OpenCode
+#
+# Usage:
+#   install-mcp                     # install for all detected tools
+#   install-mcp --claude-code       # Claude Code only
+#   install-mcp --opencode          # OpenCode only
+#   install-mcp --list              # show what will be installed, no changes
+#   install-mcp --check             # verify all MCP servers are reachable
+#
+# What it does:
+#   - Reads ~/.dev-infra/mcp/mcp-stack.json (the source of truth)
+#   - Merges the mcpServers block into ~/.claude.json (Claude Code)
+#   - Merges the mcpServers block into ~/.config/opencode/opencode.json (OpenCode)
+#   - Transforms env format between tools automatically
+#   - Never overwrites unrelated config in those files
+#
+# Required env vars (set in ~/.zshrc or ~/.secrets):
+#   GITHUB_TOKEN    — GitHub personal access token (repo scope)
+#   PROJECTS_DIR    — absolute path to your projects folder (default: ~/projects)
+
+set -e
+
+INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
+MCP_SOURCE="$INFRA_DIR/mcp/mcp-stack.json"
+
+CLAUDE_JSON="$HOME/.claude.json"
+OPENCODE_JSON="$HOME/.config/opencode/opencode.json"
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
+ok()   { echo "${GREEN}  ✓${NC} $1" }
+warn() { echo "${YELLOW}  !${NC} $1" }
+err()  { echo "${RED}  ✗${NC} $1" }
+hdr()  { echo "\n${CYAN}──${NC} $1" }
+
+# ── Validate source ───────────────────────────────────────────────────────────
+if [[ ! -f "$MCP_SOURCE" ]]; then
+  err "MCP stack config not found at $MCP_SOURCE"
+  exit 1
+fi
+
+if ! command -v python3 &>/dev/null; then
+  err "python3 is required for JSON merging"
+  exit 1
+fi
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+INSTALL_CLAUDE=true
+INSTALL_OPENCODE=true
+LIST_ONLY=false
+CHECK_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --claude-code)  INSTALL_OPENCODE=false; shift ;;
+    --opencode)     INSTALL_CLAUDE=false; shift ;;
+    --list)         LIST_ONLY=true; shift ;;
+    --check)        CHECK_ONLY=true; shift ;;
+    -h|--help)
+      echo "Usage: install-mcp [--claude-code|--opencode|--list|--check]"
+      exit 0 ;;
+    *) shift ;;
+  esac
+done
+
+# ── Resolve env vars ──────────────────────────────────────────────────────────
+PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
+
+if [[ -z "$GITHUB_TOKEN" ]]; then
+  # Try loading from ~/.secrets
+  [[ -f "$HOME/.secrets" ]] && source "$HOME/.secrets" 2>/dev/null || true
+fi
+
+if [[ -z "$GITHUB_TOKEN" ]]; then
+  warn "GITHUB_TOKEN is not set. The github MCP server will not authenticate."
+  warn "Set it in ~/.zshrc or ~/.secrets: export GITHUB_TOKEN=ghp_..."
+  GITHUB_TOKEN="YOUR_GITHUB_TOKEN_HERE"
+fi
+
+# ── List mode ─────────────────────────────────────────────────────────────────
+if [[ "$LIST_ONLY" == true ]]; then
+  echo "\nMCP servers in $MCP_SOURCE:"
+  python3 - << PYEOF
+import json
+with open("$MCP_SOURCE") as f:
+    data = json.load(f)
+servers = data.get("mcpServers", {})
+for name, cfg in servers.items():
+    if name.startswith("_"): continue
+    why = cfg.get("_why", "").split(".")[0]
+    req = cfg.get("_requires", "nothing")
+    print(f"  {name:<22} {why[:55]}")
+    print(f"  {'':22} Requires: {req[:55]}")
+    print()
+PYEOF
+  echo "Would install to:"
+  [[ "$INSTALL_CLAUDE" == true ]] && echo "  Claude Code: $CLAUDE_JSON"
+  [[ "$INSTALL_OPENCODE" == true ]] && echo "  OpenCode:    $OPENCODE_JSON"
+  exit 0
+fi
+
+# ── Check mode ────────────────────────────────────────────────────────────────
+if [[ "$CHECK_ONLY" == true ]]; then
+  hdr "Checking MCP server packages"
+  servers=("@modelcontextprotocol/server-github" "@modelcontextprotocol/server-filesystem" "@upstash/context7-mcp" "@modelcontextprotocol/server-sequential-thinking" "@playwright/mcp")
+  for pkg in "${servers[@]}"; do
+    if npm show "$pkg" version &>/dev/null 2>&1; then
+      version=$(npm show "$pkg" version 2>/dev/null)
+      ok "$pkg@$version"
+    else
+      warn "$pkg — could not verify (npm registry unreachable?)"
+    fi
+  done
+  echo ""
+  echo "Note: packages install on first use via npx — no pre-install needed."
+  exit 0
+fi
+
+# ── Python merge helper ───────────────────────────────────────────────────────
+# Merges mcpServers from mcp-stack.json into a target JSON config file.
+# Preserves all existing keys in the target; only updates mcpServers.
+merge_for_claude_code() {
+  local target="$1"
+  python3 - << PYEOF
+import json, sys, re
+
+source_path = "$MCP_SOURCE"
+target_path = "$target"
+projects_dir = "$PROJECTS_DIR"
+github_token = "$GITHUB_TOKEN"
+
+# Load source
+with open(source_path) as f:
+    source = json.load(f)
+
+# Load or create target
+try:
+    with open(target_path) as f:
+        target = json.load(f)
+except FileNotFoundError:
+    target = {}
+
+# Build clean mcpServers (strip internal _keys, resolve env vars)
+clean_servers = {}
+for name, cfg in source.get("mcpServers", {}).items():
+    if name.startswith("_"):
+        continue
+    clean = {}
+    if "command" in cfg:
+        clean["command"] = cfg["command"]
+    if "args" in cfg:
+        # Resolve \${PROJECTS_DIR} in args
+        clean["args"] = [
+            a.replace("\${PROJECTS_DIR}", projects_dir) for a in cfg["args"]
+        ]
+    if "env" in cfg and cfg["env"]:
+        # Resolve env var references
+        clean_env = {}
+        for k, v in cfg["env"].items():
+            resolved = v.replace("\${GITHUB_TOKEN}", github_token)
+            resolved = resolved.replace("\${PROJECTS_DIR}", projects_dir)
+            clean_env[k] = resolved
+        clean["env"] = clean_env
+    clean_servers[name] = clean
+
+# Merge into target
+target["mcpServers"] = {**target.get("mcpServers", {}), **clean_servers}
+
+with open(target_path, "w") as f:
+    json.dump(target, f, indent=2)
+    f.write("\n")
+
+print(f"  Merged {len(clean_servers)} servers into {target_path}")
+PYEOF
+}
+
+merge_for_opencode() {
+  local target="$1"
+  python3 - << PYEOF
+import json, sys
+
+source_path = "$MCP_SOURCE"
+target_path = "$target"
+projects_dir = "$PROJECTS_DIR"
+github_token = "$GITHUB_TOKEN"
+
+# Load source
+with open(source_path) as f:
+    source = json.load(f)
+
+# Load or create target
+try:
+    with open(target_path) as f:
+        target = json.load(f)
+except FileNotFoundError:
+    target = {}
+
+# Build clean mcpServers in OpenCode format
+# Differences from Claude Code:
+#   - env is array of "KEY=value" strings (not an object)
+#   - explicit "type": "stdio"
+clean_servers = {}
+for name, cfg in source.get("mcpServers", {}).items():
+    if name.startswith("_"):
+        continue
+    clean = {"type": "stdio"}
+    if "command" in cfg:
+        clean["command"] = cfg["command"]
+    if "args" in cfg:
+        clean["args"] = [
+            a.replace("\${PROJECTS_DIR}", projects_dir) for a in cfg["args"]
+        ]
+    if "env" in cfg and cfg["env"]:
+        env_list = []
+        for k, v in cfg["env"].items():
+            resolved = v.replace("\${GITHUB_TOKEN}", github_token)
+            resolved = resolved.replace("\${PROJECTS_DIR}", projects_dir)
+            env_list.append(f"{k}={resolved}")
+        if env_list:
+            clean["env"] = env_list
+    clean_servers[name] = clean
+
+# Merge into target
+target["mcpServers"] = {**target.get("mcpServers", {}), **clean_servers}
+
+with open(target_path, "w") as f:
+    json.dump(target, f, indent=2)
+    f.write("\n")
+
+print(f"  Merged {len(clean_servers)} servers into {target_path}")
+PYEOF
+}
+
+# ── Install ───────────────────────────────────────────────────────────────────
+echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  install-mcp"
+echo "  Source:       $MCP_SOURCE"
+echo "  PROJECTS_DIR: $PROJECTS_DIR"
+echo "  GITHUB_TOKEN: ${GITHUB_TOKEN:0:8}..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+if [[ "$INSTALL_CLAUDE" == true ]]; then
+  if command -v claude &>/dev/null || [[ -f "$CLAUDE_JSON" ]] || [[ -d "$HOME/.claude" ]]; then
+    hdr "Claude Code → $CLAUDE_JSON"
+    # Back up existing config
+    if [[ -f "$CLAUDE_JSON" ]]; then
+      cp "$CLAUDE_JSON" "${CLAUDE_JSON}.bak"
+      ok "Backed up existing config to ${CLAUDE_JSON}.bak"
+    fi
+    merge_for_claude_code "$CLAUDE_JSON"
+    ok "Done"
+  else
+    warn "Claude Code not detected — skipping"
+    warn "Install Claude Code first, then re-run: install-mcp --claude-code"
+  fi
+fi
+
+# ── OpenCode ──────────────────────────────────────────────────────────────────
+if [[ "$INSTALL_OPENCODE" == true ]]; then
+  if command -v opencode &>/dev/null || [[ -d "$HOME/.config/opencode" ]]; then
+    hdr "OpenCode → $OPENCODE_JSON"
+    mkdir -p "$(dirname "$OPENCODE_JSON")"
+    if [[ -f "$OPENCODE_JSON" ]]; then
+      cp "$OPENCODE_JSON" "${OPENCODE_JSON}.bak"
+      ok "Backed up existing config to ${OPENCODE_JSON}.bak"
+    fi
+    merge_for_opencode "$OPENCODE_JSON"
+    ok "Done"
+  else
+    warn "OpenCode not detected — skipping"
+    warn "Install OpenCode first, then re-run: install-mcp --opencode"
+  fi
+fi
+
+# ── Post-install notes ────────────────────────────────────────────────────────
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  MCP stack installed."
+echo ""
+echo "  Verify in Claude Code:"
+echo "    claude mcp list"
+echo "    /mcp               (inside a session)"
+echo ""
+echo "  First-time Playwright setup (run once):"
+echo "    npx playwright install chromium"
+echo ""
+echo "  To re-install after editing mcp-stack.json:"
+echo "    install-mcp"
+echo ""
+if [[ "$GITHUB_TOKEN" == "YOUR_GITHUB_TOKEN_HERE" ]]; then
+  echo "  ${YELLOW}!${NC} GITHUB_TOKEN was not set. To fix:"
+  echo "    1. Go to github.com/settings/tokens → New token (classic)"
+  echo "    2. Scopes needed: repo, read:org, read:user"
+  echo "    3. Add to ~/.zshrc or ~/.secrets:"
+  echo "       export GITHUB_TOKEN=ghp_your_token_here"
+  echo "    4. Re-run: install-mcp"
+  echo ""
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

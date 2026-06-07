@@ -1,0 +1,108 @@
+#!/usr/bin/env zsh
+# audit — run the 3-agent audit pipeline from anywhere inside a project
+#
+# Usage:
+#   audit                          # auto-detects project root
+#   audit --threshold 90           # stricter pass bar
+#   audit --max-iter 1             # single pass, no retry
+#   audit --dry-run                # list files only, no API calls
+#   audit --manifest path/to/file  # explicit manifest path
+#   audit --score                  # print last score and exit
+#
+# Walks up from cwd to find the project root (directory containing docs/PROJECT_MANIFEST.md
+# or scripts/audit_pipeline.py). Works from any subdirectory of the project.
+
+set -e
+
+# ── Find project root ──────────────────────────────────────────────────────────
+find_project_root() {
+  local dir="$PWD"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/scripts/audit_pipeline.py" ]]; then
+      echo "$dir"
+      return 0
+    fi
+    if [[ -f "$dir/docs/PROJECT_MANIFEST.md" ]]; then
+      echo "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo ""
+}
+
+PROJECT_ROOT="$(find_project_root)"
+
+if [[ -z "$PROJECT_ROOT" ]]; then
+  echo "ERROR: Could not find project root."
+  echo "  Looking for: scripts/audit_pipeline.py or docs/PROJECT_MANIFEST.md"
+  echo "  Run 'new-project <name>' to bootstrap a project first."
+  exit 1
+fi
+
+# ── Check for --score shortcut ─────────────────────────────────────────────────
+if [[ "$1" == "--score" ]]; then
+  REPORT="$PROJECT_ROOT/docs/AUDIT_REPORT.md"
+  if [[ ! -f "$REPORT" ]]; then
+    echo "No audit report found at $REPORT"
+    echo "Run 'audit' first."
+    exit 1
+  fi
+  echo "\nLast audit results:"
+  grep -A 8 "## Overall verdict" "$REPORT" | head -12
+  exit 0
+fi
+
+# ── Check ANTHROPIC_API_KEY ────────────────────────────────────────────────────
+if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+  # Try loading from project .env
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
+  fi
+  # Try loading from ~/.dev-infra/.env
+  INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
+  if [[ -z "$ANTHROPIC_API_KEY" ]] && [[ -f "$INFRA_DIR/.env" ]]; then
+    export $(grep -v '^#' "$INFRA_DIR/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
+  fi
+  if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+    echo "ERROR: ANTHROPIC_API_KEY is not set."
+    echo "  Set it in your shell: export ANTHROPIC_API_KEY=sk-ant-..."
+    echo "  Or add it to $PROJECT_ROOT/.env"
+    exit 1
+  fi
+fi
+
+# ── Check Python deps ──────────────────────────────────────────────────────────
+if ! python3 -c "import anthropic" &>/dev/null; then
+  echo "Missing Python dependency: anthropic"
+  echo "Install with: pip install anthropic tenacity"
+  exit 1
+fi
+
+# ── Regenerate manifest before audit ──────────────────────────────────────────
+MANIFEST="$PROJECT_ROOT/docs/PROJECT_MANIFEST.md"
+echo "→ Refreshing PROJECT_MANIFEST.md..."
+python3 "$PROJECT_ROOT/scripts/generate_manifest.py" \
+  --root "$PROJECT_ROOT" \
+  --output "$MANIFEST" \
+  --update 2>/dev/null \
+  || echo "  (manifest refresh skipped)"
+
+# ── Run audit pipeline ─────────────────────────────────────────────────────────
+echo "→ Running audit pipeline..."
+echo ""
+
+cd "$PROJECT_ROOT"
+python3 scripts/audit_pipeline.py \
+  --manifest "$MANIFEST" \
+  "$@"
+
+EXIT_CODE=$?
+
+# ── Print summary location ─────────────────────────────────────────────────────
+if [[ -f "$PROJECT_ROOT/docs/AUDIT_REPORT.md" ]]; then
+  echo ""
+  echo "Full report: $PROJECT_ROOT/docs/AUDIT_REPORT.md"
+fi
+
+exit $EXIT_CODE
