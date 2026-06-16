@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -104,8 +105,8 @@ def detect_stack(root: Path) -> dict:
                 stack["frontend"].append("i18next")
             if "stripe" in deps:
                 stack["backend"].append("Stripe")
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as e:
+            warnings.warn(f"Skipped {pkg}: {e}")
 
     # Go
     if (root / "go.mod").exists():
@@ -212,8 +213,8 @@ def extract_api_routes(path: Path) -> list[str]:
             content, re.I
         ):
             routes.append(f"{match.group(1).upper()} {match.group(2)}")
-    except Exception:
-        pass
+    except OSError as e:
+        warnings.warn(f"Skipped {path}: {e}")
     return routes
 
 
@@ -230,8 +231,8 @@ def count_todos(root: Path) -> dict:
             )
             files = [l for l in result.stdout.splitlines() if l.strip()]
             counts[marker] = len(files)
-        except Exception:
-            pass
+        except subprocess.SubprocessError as e:
+            warnings.warn(f"Skipped TODO scan for {marker!r}: {e}")
     return counts
 
 
@@ -301,7 +302,8 @@ def generate_manifest(root: Path, output_path: Path, existing: str = ""):
         else:
             try:
                 entry["lines"] = path.read_text(errors="replace").count("\n")
-            except Exception:
+            except OSError as e:
+                warnings.warn(f"Skipped {path}: {e}")
                 entry["lines"] = 0
 
         file_entries.append(entry)
@@ -314,22 +316,35 @@ def generate_manifest(root: Path, output_path: Path, existing: str = ""):
 
     if existing:
         for line in existing.splitlines():
-            if line.startswith("**Project name**"):
-                v = line.split(":", 1)[-1].strip()
+            if line.startswith("**Project name:**"):
+                v = line.split("**", 2)[-1].strip()
                 if v and v != "TODO":
                     project_name = v
-            if line.startswith("**Description**"):
-                v = line.split(":", 1)[-1].strip()
-                if v and v != "TODO":
+            if line.startswith("**Description:**"):
+                v = line.split("**", 2)[-1].strip()
+                if v and not v.startswith("TODO"):
                     project_desc = v
-            if line.startswith("**Current version**"):
-                v = line.split(":", 1)[-1].strip()
+            if line.startswith("**Current version:**"):
+                v = line.split("**", 2)[-1].strip()
                 if v:
                     current_version = v
-            if line.startswith("**License**"):
-                v = line.split(":", 1)[-1].strip()
+            if line.startswith("**License:**"):
+                v = line.split("**", 2)[-1].strip()
                 if v:
                     license_type = v
+
+    # pyproject.toml is the source of truth for version — overrides any
+    # preserved value from the existing manifest.
+    pyproject_path = root / "pyproject.toml"
+    if pyproject_path.exists():
+        try:
+            match = re.search(
+                r'version\s*=\s*"([^"]+)"', pyproject_path.read_text(errors="replace")
+            )
+            if match:
+                current_version = f"v{match.group(1)}"
+        except OSError as e:
+            warnings.warn(f"Skipped {pyproject_path}: {e}")
 
     # Build manifest content
     stack_str = ", ".join(
