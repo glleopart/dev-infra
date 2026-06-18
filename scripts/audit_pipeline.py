@@ -406,6 +406,29 @@ Pass threshold: {PASS_THRESHOLD}/100 average, each agent ≥ {MIN_AGENT_SCORE}/1
     output_path.write_text(report, encoding="utf-8")
     print(f"\n  Report written to: {output_path}")
 
+# ── Update session handoff ────────────────────────────────────────────────────────────
+
+def update_session_handoff(
+    manifest_path: Path, scores: list[int], verdict: str
+):
+    """Append audit result to SESSION_HANDOFF.md."""
+    handoff = manifest_path.parent / "SESSION_HANDOFF.md"
+    if not handoff.exists():
+        return
+    avg = sum(scores) / len(scores) if scores else 0
+    now = datetime.now().strftime("%Y-%m-%d")
+    result_line = (
+        f"\nAudit: {avg:.1f}/100 avg "
+        f"(A1:{scores[0]}, A2:{scores[1]}, A3:{scores[2]}) "
+        f"— {verdict} ({now})"
+    )
+    content = handoff.read_text(encoding="utf-8")
+    # Replace the "Audit: pending" line in the most recent version section
+    if "Audit: pending" in content:
+        content = content.replace("Audit: pending", result_line.strip(), 1)
+        handoff.write_text(content, encoding="utf-8")
+        print(f"  SESSION_HANDOFF.md updated with audit result")
+
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
@@ -538,6 +561,9 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
         verdict=final_verdict,
         history=history,
     )
+
+    # Update Session Handoff
+    update_session_handoff(manifest_path, final_scores, final_verdict)
 
     # Exit code: 0 = pass, 1 = fail
     print(f"\nFinal verdict: {final_verdict}")
