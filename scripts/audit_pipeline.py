@@ -265,7 +265,8 @@ def call_agent_cli(system: str, user_message: str, label: str) -> str:
     env.pop("ANTHROPIC_API_KEY", None)
     try:
         result = subprocess.run(
-            ["claude", "-p", combined],
+            ["claude", "-p"],
+            input=combined,
             capture_output=True, text=True, env=env, timeout=600,
         )
     except FileNotFoundError:
