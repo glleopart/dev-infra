@@ -1,0 +1,947 @@
+diff -ruN orig/CLAUDE_PROJECT_INSTRUCTIONS.md patched/CLAUDE_PROJECT_INSTRUCTIONS.md
+--- orig/CLAUDE_PROJECT_INSTRUCTIONS.md	2026-09-25 16:28:09.133063030 +0000
++++ patched/CLAUDE_PROJECT_INSTRUCTIONS.md	2026-09-25 16:31:05.395901439 +0000
+@@ -23,7 +23,8 @@
+   security-auditor, parity-auditor, quality-auditor, tutor
+ - MCP servers active: github, filesystem, context7,
+   sequential-thinking, playwright
+-- Machine: WSL2 Ubuntu 24.04, ASUS N552VX
++- Machines: WSL2 Ubuntu 24.04 (ASUS N552VX) · Debian workstation "impact"
++- Git identity per directory via `includeIf` in ~/.gitconfig
+ - Projects: `~/projects/personal/` or `~/projects/Pymetra/`
+ - SSH: `git@github-personal` (glleopart) · `git@github-pymetra` (joan-pym)
+ 
+@@ -45,6 +46,12 @@
+ Design versioned roadmap. Produce PROJECT_MANIFEST.md and
+ SESSION_HANDOFF.md content for the user to paste into disk files.
+ 
++**User brings an existing codebase / asks for an audit →**
++Run `project-architect` in *existing-project mode*: no intake from scratch.
++Produce PROJECT_MANIFEST.md from the real code, AUDIT_PROMPTS.md with
++pre-seeded findings, and a hardening version with its acceptance criterion.
++Terminal bootstrap: `new-project <name> --from <path>`.
++
+ **User pastes AUDIT_REPORT.md →**
+ Explain every finding in plain language. Teach the patterns introduced.
+ Run tutor debrief: flash-card Q&A + one experiment to try.
+@@ -59,6 +66,7 @@
+ | Type | Trigger | Skill activated |
+ |------|---------|----------------|
+ | New project | "I want to build X" | project-architect |
++| Existing project / audit | "Audit X", repo link, file tree | project-architect (existing mode) + audit-* |
+ | Plan a version | "Plan v0.X" | build-orchestrator |
+ | Review build output | User pastes files/errors | build-orchestrator |
+ | Audit review | User pastes AUDIT_REPORT.md | audit-quality |
+@@ -80,6 +88,11 @@
+   introduced, even if the user doesn't ask.
+ - One version = one coherent concern. Never bundle UI + DB + ML in
+   the same version.
++- When Claude Code and OpenCode both write to the repo: one ticket = one
++  owner = one branch (docs/TICKETS.md); writer ≠ reviewer; separate git
++  worktrees; nothing reaches `main` without the human's approval.
++- In Claude Code the main session acts as orchestrator (subagents cannot
++  spawn subagents); in OpenCode the orchestrator is the primary agent.
+ 
+ ---
+ 
+@@ -88,6 +101,7 @@
+ 
+ ```
+ SESSION TASK FOR CLAUDE CODE / OPENCODE:
++Tool: [claude-code | opencode] · Branch: [branch] · Tickets: [IDs or —]
+ Read SESSION_HANDOFF.md. Build v[X.Y].
+ 
+ Files to create in order:
+@@ -115,5 +129,7 @@
+ # FOR EACH PROJECT (upload after Step 3 of the workflow):
+ #   docs/PROJECT_MANIFEST.md     ← re-upload when it changes
+ #   docs/SESSION_HANDOFF.md      ← re-upload after every build session
++#   docs/AUDIT_REPORT.md         ← after each audit (or paste in chat)
++#   docs/TICKETS.md              ← only when two tools write to the repo
+ #
+ # ─────────────────────────────────────────────────────────────────────────────
+diff -ruN orig/README.md patched/README.md
+--- orig/README.md	2026-09-25 16:28:08.809063010 +0000
++++ patched/README.md	2026-09-25 16:30:44.178443821 +0000
+@@ -86,7 +86,8 @@
+     $ audit
+     → security-auditor (Agent 1) → parity-auditor (Agent 2) → quality-auditor (Agent 3)
+     → docs/AUDIT_REPORT.md written
+-    → loop until avg ≥ 85 or max 3 iterations
++    → project rules from docs/AUDIT_PROMPTS.md are injected into every agent
++    → fix P0/P1, re-run until avg ≥ 85
+ 
+   STEP D — LEARN (claude.ai)
+     tutor explains patterns, code decisions, concepts introduced
+@@ -111,10 +112,10 @@
+          ~/.dev-infra/bin/audit \
+          ~/.dev-infra/bin/install-agents
+ 
+-# 3. Add to ~/.zshrc
++# 3. Add to ~/.zshrc (API key only for `audit --api`; keep it in ~/.secrets)
+ export DEV_INFRA_DIR="$HOME/.dev-infra"
+ export PATH="$DEV_INFRA_DIR/bin:$PATH"
+-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
++[[ -f "$HOME/.secrets" ]] && source "$HOME/.secrets"
+ 
+ # 4. Reload and install Python deps
+ source ~/.zshrc
+@@ -143,11 +144,13 @@
+ 
+ ```zsh
+ # From anywhere inside a project
+-audit                   # full run, auto-detects root
++audit                   # single pass via `claude` CLI, auto-detects root
++audit --api             # use the Anthropic API instead (needs key)
+ audit --score           # print last result, no API calls
+-audit --dry-run         # list files that would be sent
++audit --dry-run         # list files that would be sent (+ omitted ones)
+ audit --threshold 90    # stricter pass bar (default: 85)
+-audit --max-iter 1      # single pass, no retry
++audit --max-iter 2      # pause for fixes, then re-audit fresh code
++audit --max-files 200   # raise the file budget for large repos
+ ```
+ 
+ ---
+@@ -156,7 +159,7 @@
+ 
+ | Agent | Model | Invoke in Claude Code | Invoke in OpenCode |
+ |-------|-------|-----------------------|--------------------|
+-| orchestrator | Opus | `/agents → orchestrator` | `@orchestrator` |
++| orchestrator | opus | main session (via CLAUDE.md) | `@orchestrator` (primary) |
+ | builder | Sonnet | Delegated by orchestrator | `@builder` |
+ | security-auditor | Sonnet | Via `audit` command | Via `audit` command |
+ | parity-auditor | Sonnet | Via `audit` command | Via `audit` command |
+@@ -205,8 +208,8 @@
+ 
+ ## Requirements
+ 
+-- Python 3.9+: `pip install anthropic tenacity`
+-- `ANTHROPIC_API_KEY` set in environment
++- Python 3.9+ in a pyenv/conda env: `pip install anthropic tenacity pip-licenses`
++- `claude` CLI (default audit mode) or `ANTHROPIC_API_KEY` in ~/.secrets (`--api`)
+ - Claude Code and/or OpenCode installed
+ 
+ ---
+diff -ruN orig/SETUP.md patched/SETUP.md
+--- orig/SETUP.md	2026-09-25 16:28:08.925063017 +0000
++++ patched/SETUP.md	2026-09-25 16:30:44.178222127 +0000
+@@ -25,12 +25,12 @@
+ │   ├── audit_pipeline.py
+ │   └── generate_manifest.py
+ ├── skills/
+-│   ├── project-architect/SKILL.md
+-│   ├── build-orchestrator/SKILL.md
+-│   ├── audit-security/SKILL.md
+-│   ├── audit-parity/SKILL.md
+-│   ├── audit-quality/SKILL.md
+-│   └── ml-integration/SKILL.md
++│   ├── project-architect.md
++│   ├── build-orchestrator.md
++│   ├── audit-security.md
++│   ├── audit-parity.md
++│   ├── audit-quality.md
++│   └── ml-integration.md
+ └── templates/
+     ├── PROJECT_MANIFEST.md
+     ├── SESSION_HANDOFF.md
+@@ -58,12 +58,10 @@
+ export DEV_INFRA_DIR="$HOME/.dev-infra"
+ export PATH="$DEV_INFRA_DIR/bin:$PATH"
+ 
+-# Anthropic API key (used by the audit pipeline)
+-# Option A: hardcode here (simplest)
+-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+-
+-# Option B: load from a secrets file (more secure — add ~/.secrets to .gitignore)
+-# source "$HOME/.secrets"
++# Anthropic API key — ONLY needed for `audit --api` (default mode uses the
++# `claude` CLI and your claude.ai subscription). Never hardcode it here:
++#   echo 'export ANTHROPIC_API_KEY="sk-ant-..."' > ~/.secrets && chmod 600 ~/.secrets
++[[ -f "$HOME/.secrets" ]] && source "$HOME/.secrets"
+ ```
+ 
+ Then reload your shell:
+@@ -84,14 +82,14 @@
+ 
+ ## Step 4 — Install Python dependencies (once)
+ 
+-The audit pipeline requires two packages:
++The audit pipeline requires two packages. Ubuntu 24.04 blocks `pip install`
++into the system Python (PEP 668), so use your pyenv/conda default env:
+ 
+ ```zsh
+-pip install anthropic tenacity
++python3 -m pip install anthropic tenacity pip-licenses
+ ```
+ 
+-If you use multiple Python environments, install in whichever Python is your
+-default `python3`. Check with: `which python3`.
++`which python3` must point to that env (not /usr/bin/python3).
+ 
+ ---
+ 
+@@ -106,12 +104,12 @@
+ 4. Upload these 6 files (drag and drop, or click Add):
+ 
+ ```
+-~/.dev-infra/skills/project-architect/SKILL.md
+-~/.dev-infra/skills/build-orchestrator/SKILL.md
+-~/.dev-infra/skills/audit-security/SKILL.md
+-~/.dev-infra/skills/audit-parity/SKILL.md
+-~/.dev-infra/skills/audit-quality/SKILL.md
+-~/.dev-infra/skills/ml-integration/SKILL.md
++~/.dev-infra/skills/project-architect.md
++~/.dev-infra/skills/build-orchestrator.md
++~/.dev-infra/skills/audit-security.md
++~/.dev-infra/skills/audit-parity.md
++~/.dev-infra/skills/audit-quality.md
++~/.dev-infra/skills/ml-integration.md
+ ```
+ 
+ You only need `ml-integration` if the project will use AI. The other 5 are
+@@ -231,8 +229,8 @@
+ → Run `source ~/.zshrc` or open a new terminal tab.
+ → Check `echo $PATH` contains `~/.dev-infra/bin`.
+ 
+-**`ERROR: ANTHROPIC_API_KEY is not set`**
+-→ Add `export ANTHROPIC_API_KEY="sk-ant-..."` to `~/.zshrc` and `source ~/.zshrc`.
++**`ERROR: --api requires ANTHROPIC_API_KEY`**
++→ Put it in `~/.secrets` (chmod 600). Without `--api`, the `claude` CLI is used and no key is needed.
+ 
+ **`Missing Python dependency: anthropic`**
+ → Run `pip install anthropic tenacity`.
+diff -ruN orig/WORKFLOW.md patched/WORKFLOW.md
+--- orig/WORKFLOW.md	2026-09-25 16:28:09.033063024 +0000
++++ patched/WORKFLOW.md	2026-09-25 16:30:44.178559764 +0000
+@@ -109,7 +109,7 @@
+ ### PHASE C — AUDIT (terminal)
+ 
+ ```zsh
+-audit                    # runs 3 agents, writes docs/AUDIT_REPORT.md
++audit                    # runs 3 agents (+ docs/AUDIT_PROMPTS.md rules), writes docs/AUDIT_REPORT.md
+ audit --score            # check result
+ ```
+ 
+diff -ruN orig/agents/builder.md patched/agents/builder.md
+--- orig/agents/builder.md	2026-09-25 16:28:05.973062842 +0000
++++ patched/agents/builder.md	2026-09-25 16:28:27.784747454 +0000
+@@ -8,11 +8,11 @@
+   for", or when the orchestrator delegates a task. Never activate without
+   a file spec — ask for one if none is provided.
+ 
+-# Claude Code model string:
+-model: claude-sonnet-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: sonnet
+ 
+-# OpenCode model string:
+-# model: anthropic/claude-sonnet-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-sonnet-5
+ 
+ tools:
+   - Read
+@@ -142,6 +142,10 @@
+ 
+ ## Rules you never break
+ 
++- Check the branch before writing: it must match the spec/ticket branch
++  (`git branch --show-current`). If `docs/TICKETS.md` exists, only touch
++  files listed in a ticket owned by the tool you are running in.
++
+ - One file per invocation. Do not implement two files in one response.
+ - Do not invent imports. If a module does not exist, report it.
+ - Do not add features not in the spec — even if they seem obviously useful.
+diff -ruN orig/agents/orchestrator.md patched/agents/orchestrator.md
+--- orig/agents/orchestrator.md	2026-09-25 16:28:05.869062836 +0000
++++ patched/agents/orchestrator.md	2026-09-25 16:28:27.784527620 +0000
+@@ -8,16 +8,19 @@
+   Trigger with: "start the session", "plan version X", "what should we build next",
+   "delegate to builder", or any time you want a structured plan before coding.
+ 
+-# Claude Code model string:
+-model: claude-opus-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: opus
+ 
+-# OpenCode model string (used when installing for OpenCode — see install-agents):
+-# model: anthropic/claude-opus-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-opus-5-5
+ 
+ tools:
+   - Read
+   - Grep
+   - Glob
++  - Write      # docs/ only — see "Write scope" below
++  - Edit       # docs/ only
++  - Bash       # read-only git/status commands only (git status, git log, git diff)
+   - mcp__sequential-thinking
+ 
+ maxTurns: 20
+@@ -31,12 +34,40 @@
+ 
+ ---
+ 
++## Write scope
++
++You may write or edit ONLY files under `docs/` (SESSION_HANDOFF.md,
++PROJECT_MANIFEST.md, VERSION_PLAN.md, TICKETS.md). Any change to source
++code, config, or infrastructure goes through the builder. Bash is for
++read-only inspection (`git status`, `git log`, `git diff`, `ls`).
++
++## Runtime note (Claude Code vs OpenCode)
++
++- **OpenCode:** you run as the primary agent and delegate with `@builder`.
++- **Claude Code:** subagents cannot spawn other subagents. Run the orchestrator
++  as the *main session* (the project's CLAUDE.md tells the main session to
++  follow these rules) and delegate to `builder` via the Task tool. Do not
++  invoke the orchestrator itself as a subagent.
++
++## Multi-agent coordination (when more than one tool writes to the repo)
++
++If `docs/TICKETS.md` exists, it is the ownership ledger:
++- One ticket = one owner (claude-code | opencode) = one branch `fix/<ID>-<slug>`.
++- Never delegate a ticket owned by the other tool.
++- Writer ≠ reviewer: code built through Claude Code is reviewed in OpenCode
++  and vice versa. Record the verdict in the ticket row.
++- Before delegating, confirm the current branch matches the ticket branch
++  (`git branch --show-current`). If not, stop and ask.
++
++---
++
+ ## Session startup (run every time)
+ 
+ Before anything else:
+ 
+ 1. Read `docs/SESSION_HANDOFF.md` — understand the last session's state.
+ 2. Read `docs/PROJECT_MANIFEST.md` — understand the full project map.
++   Also read `docs/AUDIT_PROMPTS.md` and `docs/TICKETS.md` if they exist.
+ 3. State in one paragraph: current version, what was last completed, and
+    what the next target version's acceptance criterion is.
+ 4. Ask the user to confirm before producing any plan.
+diff -ruN orig/agents/parity-auditor.md patched/agents/parity-auditor.md
+--- orig/agents/parity-auditor.md	2026-09-25 16:28:06.549062876 +0000
++++ patched/agents/parity-auditor.md	2026-09-25 16:28:16.150631258 +0000
+@@ -9,11 +9,11 @@
+   after security-auditor via the audit pipeline. Requires the security-
+   auditor's output as context — do not run without it.
+ 
+-# Claude Code model string:
+-model: claude-sonnet-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: sonnet
+ 
+-# OpenCode model string:
+-# model: anthropic/claude-sonnet-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-sonnet-5
+ 
+ tools:
+   - Read
+diff -ruN orig/agents/quality-auditor.md patched/agents/quality-auditor.md
+--- orig/agents/quality-auditor.md	2026-09-25 16:28:06.685062884 +0000
++++ patched/agents/quality-auditor.md	2026-09-25 16:28:36.301773658 +0000
+@@ -9,11 +9,11 @@
+   parity-auditor via the audit pipeline. Requires both prior agents'
+   outputs as context.
+ 
+-# Claude Code model string:
+-model: claude-sonnet-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: sonnet
+ 
+-# OpenCode model string:
+-# model: anthropic/claude-sonnet-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-sonnet-5
+ 
+ tools:
+   - Read
+@@ -110,24 +110,16 @@
+ 
+ ### Python dependencies
+ ```bash
+-# Generate license list
+-if command -v pip &>/dev/null; then
+-  pip show $(pip freeze 2>/dev/null | cut -d= -f1) 2>/dev/null | \
+-    grep -E "^(Name|License):" | paste - - | \
+-    awk '{print $2, "|", $4}' | sort
+-fi
++# Direct deps only, with licenses (install once: pip install pip-licenses)
++python3 -m piplicenses --from=mixed --format=markdown --with-urls 2>/dev/null \
++  || echo "pip-licenses not installed: pip install pip-licenses"
+ ```
+ 
+ ### Node dependencies
+ ```bash
+-# Quick license summary
++# Production deps only
+ if [ -f package.json ]; then
+-  cat package.json | python3 -c "
+-import sys, json
+-d = json.load(sys.stdin)
+-deps = {**d.get('dependencies', {}), **d.get('devDependencies', {})}
+-for k in sorted(deps): print(k)
+-  " 2>/dev/null | head -40
++  npx --yes license-checker --production --summary 2>/dev/null | head -40
+ fi
+ ```
+ 
+diff -ruN orig/agents/security-auditor.md patched/agents/security-auditor.md
+--- orig/agents/security-auditor.md	2026-09-25 16:28:06.445062870 +0000
++++ patched/agents/security-auditor.md	2026-09-25 16:28:16.154549246 +0000
+@@ -9,11 +9,11 @@
+   "security review", "check for vulnerabilities", or via the audit
+   pipeline script. Always runs before parity-auditor.
+ 
+-# Claude Code model string:
+-model: claude-sonnet-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: sonnet
+ 
+-# OpenCode model string:
+-# model: anthropic/claude-sonnet-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-sonnet-5
+ 
+ tools:
+   - Read
+diff -ruN orig/agents/tutor.md patched/agents/tutor.md
+--- orig/agents/tutor.md	2026-09-25 16:28:06.869062895 +0000
++++ patched/agents/tutor.md	2026-09-25 16:28:16.156395151 +0000
+@@ -10,11 +10,11 @@
+   way", "I don't understand X", or "learning debrief". Also activate
+   proactively if the user asks a technical question during building.
+ 
+-# Claude Code model string:
+-model: claude-opus-4-6
++# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
++model: opus
+ 
+-# OpenCode model string:
+-# model: anthropic/claude-opus-4-6
++# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
++# opencode-model: anthropic/claude-opus-5-5
+ 
+ tools:
+   - Read
+diff -ruN orig/bin/audit patched/bin/audit
+--- orig/bin/audit	2026-09-25 16:28:06.934701313 +0000
++++ patched/bin/audit	2026-09-25 16:29:21.402599441 +0000
+@@ -53,23 +53,23 @@
+   exit 0
+ fi
+ 
+-# ── Check ANTHROPIC_API_KEY ────────────────────────────────────────────────────
+-if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+-  # Try loading from project .env
+-  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+-    export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
+-  fi
+-  # Try loading from ~/.dev-infra/.env
++# ── API key: only needed with --api (default mode uses the `claude` CLI) ──────
++# Never read the PROJECT's .env: in app repos it holds the application's own key.
++# Tooling key lives in ~/.secrets (chmod 600) or $DEV_INFRA_DIR/.env.
++if [[ " $* " == *" --api "* ]] && [[ -z "$ANTHROPIC_API_KEY" ]]; then
+   INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
+-  if [[ -z "$ANTHROPIC_API_KEY" ]] && [[ -f "$INFRA_DIR/.env" ]]; then
+-    export $(grep -v '^#' "$INFRA_DIR/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
+-  fi
++  for f in "$HOME/.secrets" "$INFRA_DIR/.env"; do
++    if [[ -z "$ANTHROPIC_API_KEY" ]] && [[ -f "$f" ]]; then
++      export ANTHROPIC_API_KEY="$(grep -E '^(export )?ANTHROPIC_API_KEY=' "$f" | tail -1 | cut -d= -f2- | tr -d "\"'")"
++    fi
++  done
+   if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+-    echo "ERROR: ANTHROPIC_API_KEY is not set."
+-    echo "  Set it in your shell: export ANTHROPIC_API_KEY=sk-ant-..."
+-    echo "  Or add it to $PROJECT_ROOT/.env"
++    echo "ERROR: --api requires ANTHROPIC_API_KEY (set it in ~/.secrets or \$DEV_INFRA_DIR/.env)."
+     exit 1
+   fi
++elif [[ " $* " != *" --api "* ]] && ! command -v claude &>/dev/null; then
++  echo "ERROR: default mode uses the 'claude' CLI, which is not installed. Use --api."
++  exit 1
+ fi
+ 
+ # ── Check Python deps ──────────────────────────────────────────────────────────
+@@ -93,11 +93,12 @@
+ echo ""
+ 
+ cd "$PROJECT_ROOT"
++set +e   # capture the pipeline's exit code instead of aborting
+ python3 scripts/audit_pipeline.py \
+   --manifest "$MANIFEST" \
+   "$@"
+-
+ EXIT_CODE=$?
++set -e
+ 
+ # ── Print summary location ─────────────────────────────────────────────────────
+ if [[ -f "$PROJECT_ROOT/docs/AUDIT_REPORT.md" ]]; then
+diff -ruN orig/bin/install-agents patched/bin/install-agents
+--- orig/bin/install-agents	2026-09-25 16:28:06.935036788 +0000
++++ patched/bin/install-agents	2026-09-25 16:29:05.436227653 +0000
+@@ -124,20 +124,36 @@
+ 
+     for f in "${AGENT_FILES[@]}"; do
+       name=$(basename "$f")
+-      # OpenCode needs 'anthropic/claude-X' model string format.
+-      # Transform: 'model: claude-X' → 'model: anthropic/claude-X'
+-      # The commented OpenCode model line in each file is the source of truth.
+-      # We activate it and deactivate the Claude Code line.
+-      sed \
+-        -e 's/^model: claude-/model: anthropic\/claude-/' \
+-        -e 's/^# model: anthropic\//model: anthropic\//' \
+-        "$f" | \
+-        # Remove the now-redundant duplicate model line if both exist
+-        awk '
+-          /^model:/ { if (seen_model++) next }
+-          { print }
+-        ' \
+-        > "$OPENCODE_DIR/$name"
++      # OpenCode uses a different frontmatter schema than Claude Code:
++      #   model  -> full provider id, taken from the "# opencode-model:" line
++      #   tools  -> map of booleans (write/edit/bash), not a list of tool names
++      #   mode   -> primary (orchestrator, tutor) | subagent (everything else)
++      # Claude-Code-only keys (maxTurns, effort, mcp__*) are dropped.
++      python3 - "$f" "$OPENCODE_DIR/$name" <<'PY'
++import json, re, sys
++from pathlib import Path
++src, dst = Path(sys.argv[1]), Path(sys.argv[2])
++text = src.read_text(encoding="utf-8")
++m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
++if not m:
++    sys.exit(f"no frontmatter in {src}")
++fm, body = m.group(1), m.group(2)
++name = re.search(r"^name:\s*(\S+)", fm, re.M).group(1)
++desc = re.search(r"^description:\s*>?\s*\n((?:[ \t]+.*\n?)+)", fm, re.M)
++desc = " ".join(l.strip() for l in desc.group(1).splitlines()) if desc else name
++oc_model = re.search(r"^#\s*opencode-model:\s*(\S+)", fm, re.M)
++tools = set(re.findall(r"^\s*-\s*([A-Za-z]+)", fm, re.M))
++mode = "primary" if name in {"orchestrator", "tutor"} else "subagent"
++out = ["---", f"description: {json.dumps(desc, ensure_ascii=False)}", f"mode: {mode}"]
++if oc_model:
++    out.append(f"model: {oc_model.group(1)}")
++out += ["tools:",
++        f"  write: {str('Write' in tools).lower()}",
++        f"  edit: {str('Edit' in tools).lower()}",
++        f"  bash: {str('Bash' in tools).lower()}",
++        "---", ""]
++dst.write_text("\n".join(out) + body, encoding="utf-8")
++PY
+       ok "$name"
+     done
+   else
+diff -ruN orig/bin/new-project patched/bin/new-project
+--- orig/bin/new-project	2026-09-25 16:28:07.427154104 +0000
++++ patched/bin/new-project	2026-09-25 16:30:44.178700313 +0000
+@@ -84,7 +84,7 @@
+ mkdir -p docs
+ 
+ # Only copy if the file doesn't already exist (don't overwrite manual work)
+-for tmpl in PROJECT_MANIFEST SESSION_HANDOFF AUDIT_PROMPTS VERSION_PLAN; do
++for tmpl in PROJECT_MANIFEST SESSION_HANDOFF AUDIT_PROMPTS VERSION_PLAN TICKETS; do
+   src="$INFRA_DIR/templates/${tmpl}.md"
+   dst="docs/${tmpl}.md"
+   if [[ -f "$dst" ]]; then
+@@ -202,13 +202,13 @@
+ echo "  Next steps:"
+ echo ""
+ echo "  1. Open a new Claude project at claude.ai"
+-echo "  2. Upload these 6 skill files in Project Settings → Skills:"
+-echo "     $INFRA_DIR/skills/project-architect/SKILL.md"
+-echo "     $INFRA_DIR/skills/build-orchestrator/SKILL.md"
+-echo "     $INFRA_DIR/skills/audit-security/SKILL.md"
+-echo "     $INFRA_DIR/skills/audit-parity/SKILL.md"
+-echo "     $INFRA_DIR/skills/audit-quality/SKILL.md"
+-echo "     $INFRA_DIR/skills/ml-integration/SKILL.md"
++echo "  2. Upload these 6 skill files in Project Settings → Knowledge:"
++echo "     $INFRA_DIR/skills/project-architect.md"
++echo "     $INFRA_DIR/skills/build-orchestrator.md"
++echo "     $INFRA_DIR/skills/audit-security.md"
++echo "     $INFRA_DIR/skills/audit-parity.md"
++echo "     $INFRA_DIR/skills/audit-quality.md"
++echo "     $INFRA_DIR/skills/ml-integration.md"
+ echo ""
+ echo "  3. Paste this as your first message in Claude:"
+ echo ""
+Binary files orig/scripts/__pycache__/audit_pipeline.cpython-312.pyc and patched/scripts/__pycache__/audit_pipeline.cpython-312.pyc differ
+diff -ruN orig/scripts/audit_pipeline.py patched/scripts/audit_pipeline.py
+--- orig/scripts/audit_pipeline.py	2026-09-25 16:28:07.429159934 +0000
++++ patched/scripts/audit_pipeline.py	2026-09-25 16:30:08.265727820 +0000
+@@ -10,13 +10,20 @@
+ Requires:
+     pip install anthropic tenacity
+ 
++Modes:
++    default  — `claude -p` CLI (claude.ai subscription, no API credits)
++    --api    — Anthropic API (requires ANTHROPIC_API_KEY)
++
+ Environment:
+-    ANTHROPIC_API_KEY  — required
++    ANTHROPIC_API_KEY  — only with --api
++    AUDIT_MODEL        — API model id   (default: claude-sonnet-5)
++    AUDIT_CLI_MODEL    — CLI model alias (default: sonnet)
+ """
+ 
+ import argparse
+ import json
+ import os
++import subprocess
+ import sys
+ import time
+ from datetime import datetime
+@@ -26,19 +33,21 @@
+     import anthropic
+     from tenacity import retry, stop_after_attempt, wait_exponential
+ except ImportError:
+-    import subprocess
+-    print("Installing missing dependencies...")
+-    subprocess.check_call([sys.executable, "-m", "pip", "install", "anthropic", "tenacity", "-q"])
+-    import anthropic
+-    from tenacity import retry, stop_after_attempt, wait_exponential
++    # No silent `pip install`: it fails on PEP 668 systems (Ubuntu 24.04) and
++    # mutates whatever interpreter happens to be active.
++    sys.exit(
++        "Missing dependency: pip install anthropic tenacity  "
++        "(in a venv/pyenv/conda env — not the system Python)"
++    )
+ 
+ # ── Configuration ────────────────────────────────────────────────────────────
+ 
+ PASS_THRESHOLD = 85          # average score required to pass
+ MIN_AGENT_SCORE = 70         # each individual agent must score at least this
+-MAX_FILE_CHARS = 8_000       # max chars per source file sent to agents
+-MAX_FILES = 40               # max number of source files included
+-MODEL = "claude-sonnet-4-6"
++MAX_FILE_CHARS = 12_000      # max chars per source file (override: --max-file-chars)
++MAX_FILES = 120              # max source files included (override: --max-files)
++MODEL = os.environ.get("AUDIT_MODEL", "claude-sonnet-5")       # never hardcode ids
++CLI_MODEL = os.environ.get("AUDIT_CLI_MODEL", "sonnet")        # claude CLI alias
+ MAX_TOKENS = 4096
+ USE_API = False  # set by --api flag
+ 
+@@ -47,8 +56,19 @@
+     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+     ".cpp", ".c", ".h", ".cs", ".rb", ".php", ".swift", ".kt",
+     ".vue", ".svelte", ".html", ".css", ".scss",
+-    ".json", ".yaml", ".yml", ".toml", ".env.example",
+-    ".md", ".txt", ".sh",
++    ".json", ".yaml", ".yml", ".toml", ".sh", ".conf",
++}
++# Docs/prose are NOT source: they burn the budget and bias the auditors.
++# Always include these by exact name even though their suffix is excluded.
++ALWAYS_INCLUDE = {
++    ".env.example", "Makefile", "Dockerfile", "docker-compose.yml",
++    "requirements.txt", "requirements-dev.txt", "nginx.conf", ".gitignore",
++    ".dockerignore",
++}
++# Generated/huge files that add nothing to an audit
++SKIP_FILES = {
++    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
++    "Pipfile.lock", "uv.lock",
+ }
+ 
+ # Directories to always skip
+@@ -79,14 +99,23 @@
+             parts = rel.parts
+             if any(p in SKIP_DIRS for p in parts):
+                 continue
+-            if path.suffix.lower() in CODE_EXTENSIONS or path.name in {
+-                ".env.example", "Makefile", "Dockerfile", "docker-compose.yml"
+-            }:
++            if path.name in SKIP_FILES:
++                continue
++            if path.suffix.lower() in CODE_EXTENSIONS or path.name in ALWAYS_INCLUDE:
+                 all_paths.append(rel)
+ 
+     # Sort: priority files first, then alphabetical
+     all_paths.sort(key=lambda p: (str(p) not in priority_paths, str(p)))
++    omitted = [str(p) for p in all_paths[MAX_FILES:]]
+     all_paths = all_paths[:MAX_FILES]
++    if omitted:
++        # Tell the agents explicitly so they mark these UNREVIEWED instead of
++        # silently scoring code they never saw.
++        files["__OMITTED_FILES__"] = (
++            f"{len(omitted)} files exceeded the MAX_FILES budget and were NOT sent. "
++            "Mark any finding that depends on them as UNREVIEWED:\n"
++            + "\n".join(omitted)
++        )
+ 
+     for rel in all_paths:
+         full = root / rel
+@@ -117,6 +146,14 @@
+     return paths
+ 
+ 
++def load_audit_prompts(manifest_path: Path) -> str:
++    """Project-specific rules from docs/AUDIT_PROMPTS.md (next to the manifest)."""
++    path = manifest_path.parent / "AUDIT_PROMPTS.md"
++    if not path.exists():
++        return ""
++    return path.read_text(encoding="utf-8", errors="replace")
++
++
+ def format_files_for_prompt(files: dict[str, str]) -> str:
+     """Format collected files as a readable block for the LLM."""
+     parts = []
+@@ -251,28 +288,37 @@
+ 
+ # ── API call with retry ───────────────────────────────────────────────────────
+ 
+-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
++_client = None
+ 
+ 
+-import subprocess
++def get_client() -> "anthropic.Anthropic":
++    """Create the API client lazily so CLI mode never needs a key."""
++    global _client
++    if _client is None:
++        _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
++    return _client
++
+ 
+ def call_agent_cli(system: str, user_message: str, label: str) -> str:
+     """Call Claude via CLI --uses claude.ai subscription, no API credits."""
+     print(f"  Calling {label} (CLI)...", end="", flush=True)
+-    import time; start = time.time()
++    start = time.time()
+     combined = f"<instructions>\n{system}\n</instructions>\n\n<task>\n{user_message}\n</task>"
+-    env = __import__("os").environ.copy()
++    env = os.environ.copy()
+     env.pop("ANTHROPIC_API_KEY", None)
+     try:
+         result = subprocess.run(
+-            ["claude", "-p"],
++            ["claude", "-p", "--model", CLI_MODEL],
+             input=combined,
+             capture_output=True, text=True, env=env, timeout=600,
+         )
+     except FileNotFoundError:
+         print("\nERROR: claude CLI not found. Use --api flag instead.")
+-        __import__("sys").exit(1)
++        sys.exit(1)
+     elapsed = time.time() - start
++    if result.returncode != 0 or not result.stdout.strip():
++        print(f"\nERROR: claude CLI failed (exit {result.returncode}):\n{result.stderr[-2000:]}")
++        sys.exit(1)
+     print(f" done ({elapsed:.1f}s)")
+     return result.stdout.strip()
+ 
+@@ -281,7 +327,7 @@
+     """Call Claude API directly. Requires ANTHROPIC_API_KEY with credits."""
+     print(f"  Calling {label}...", end="", flush=True)
+     start = time.time()
+-    response = client.messages.create(
++    response = get_client().messages.create(
+         model=MODEL,
+         max_tokens=MAX_TOKENS,
+         system=system,
+@@ -480,6 +526,12 @@
+     if manifest_path.exists():
+         manifest_content = manifest_path.read_text(encoding="utf-8", errors="replace")
+ 
++    project_rules = load_audit_prompts(manifest_path)
++    rules_block = (
++        f"PROJECT-SPECIFIC AUDIT RULES (docs/AUDIT_PROMPTS.md — apply on top of your rubric, "
++        f"including thresholds and pre-seeded findings to verify):\n```\n{project_rules}\n```\n\n"
++        if project_rules else ""
++    )
+     code_block = format_files_for_prompt(files)
+ 
+     if dry_run:
+@@ -496,10 +548,16 @@
+ 
+     for iteration in range(1, max_iterations + 1):
+         print(f"\n── Iteration {iteration}/{max_iterations} ──────────────────")
++        if iteration > 1:
++            # Re-read the code: auditing unchanged code again only burns credits
++            # and produces noisy, non-deterministic scores.
++            files = collect_files(root, manifest_path)
++            code_block = format_files_for_prompt(files)
+ 
+         # ── Agent 1 ──────────────────────────────────────────────────────────
+         print("\nAgent 1 — Security & Architecture")
+         a1_user = (
++            f"{rules_block}"
+             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
+             f"SOURCE CODE:\n{code_block}"
+         )
+@@ -513,6 +571,7 @@
+         a2_user = (
+             f"AGENT 1 CONTEXT:\n{a2_context}\n\n"
+             f"AGENT 1 FULL OUTPUT:\n```\n{a1_output}\n```\n\n"
++            f"{rules_block}"
+             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
+             f"SOURCE CODE:\n{code_block}"
+         )
+@@ -529,6 +588,7 @@
+             f"AGENT 2 SCORE: {a2_score}/100\n\n"
+             f"AGENT 1 OUTPUT:\n```\n{a1_output}\n```\n\n"
+             f"AGENT 2 OUTPUT:\n```\n{a2_output}\n```\n\n"
++            f"{rules_block}"
+             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
+             f"SOURCE CODE:\n{code_block}"
+         )
+@@ -566,9 +626,12 @@
+ 
+         if iteration < max_iterations:
+             print(f"\n  Score below threshold ({avg:.1f} < {PASS_THRESHOLD})")
+-            print("  Review the findings and fix P0/P1 issues, then re-run.")
+-            print("  (Pipeline will retry automatically in next iteration)")
+-            time.sleep(2)
++            if not sys.stdin.isatty():
++                print("  Non-interactive run: stopping. Fix P0/P1 and re-run `audit`.")
++                break
++            reply = input("  Fix P0/P1 now, then press Enter to re-audit (q = stop): ")
++            if reply.strip().lower() == "q":
++                break
+ 
+     # Write report
+     report_path = manifest_path.parent / "AUDIT_REPORT.md"
+@@ -593,7 +656,7 @@
+ # ── Entry point ───────────────────────────────────────────────────────────────
+ 
+ def main():
+-    global PASS_THRESHOLD
++    global PASS_THRESHOLD, USE_API, MAX_FILES, MAX_FILE_CHARS
+     parser = argparse.ArgumentParser(
+         description="3-agent automated code audit pipeline",
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+@@ -607,8 +670,8 @@
+     parser.add_argument(
+         "--max-iter",
+         type=int,
+-        default=3,
+-        help="Maximum audit iterations before giving up (default: 3)",
++        default=1,
++        help="Audit iterations; >1 pauses for fixes between runs (default: 1)",
+     )
+     parser.add_argument(
+         "--dry-run",
+@@ -622,9 +685,22 @@
+         help=f"Pass score threshold (default: {PASS_THRESHOLD})",
+     )
+ 
++    parser.add_argument(
++        "--api",
++        action="store_true",
++        help="Use the Anthropic API instead of the claude CLI (needs ANTHROPIC_API_KEY)",
++    )
++    parser.add_argument("--max-files", type=int, default=MAX_FILES,
++                        help=f"Max source files sent (default: {MAX_FILES})")
++    parser.add_argument("--max-file-chars", type=int, default=MAX_FILE_CHARS,
++                        help=f"Max chars per file (default: {MAX_FILE_CHARS})")
++
+     args = parser.parse_args()
+ 
+     PASS_THRESHOLD = args.threshold
++    USE_API = args.api
++    MAX_FILES = args.max_files
++    MAX_FILE_CHARS = args.max_file_chars
+ 
+     manifest_path = Path(args.manifest)
+     if not manifest_path.exists() and not args.dry_run:
+diff -ruN orig/skills/audit-quality.md patched/skills/audit-quality.md
+--- orig/skills/audit-quality.md	2026-09-25 16:28:07.973062961 +0000
++++ patched/skills/audit-quality.md	2026-09-25 16:28:36.302059497 +0000
+@@ -79,8 +79,7 @@
+ 
+ **Python:**
+ ```bash
+-pip show $(pip freeze | cut -d= -f1) 2>/dev/null | grep -E "^(Name|License):" | \
+-  paste - - | awk '{print $2, $4}'
++python3 -m piplicenses --from=mixed --format=markdown
+ ```
+ 
+ **Node:**
+diff -ruN orig/skills/ml-integration.md patched/skills/ml-integration.md
+--- orig/skills/ml-integration.md	2026-09-25 16:28:08.153062971 +0000
++++ patched/skills/ml-integration.md	2026-09-25 16:28:36.302255743 +0000
+@@ -127,11 +127,12 @@
+ from tenacity import retry, stop_after_attempt, wait_exponential
+ 
+ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
++MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-5")  # never hardcode model ids
+ 
+ @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+ def complete(prompt: str, system: str = "", max_tokens: int = 1024) -> str:
+     response = client.messages.create(
+-        model="claude-sonnet-4-20250514",
++        model=MODEL,
+         max_tokens=max_tokens,
+         system=system,
+         messages=[{"role": "user", "content": prompt}]
+@@ -188,7 +189,7 @@
+ 
+ ```python
+ # ai/llm/chat.py
+-from .client import client
++from .client import client, MODEL
+ 
+ class ChatSession:
+     def __init__(self, system: str = ""):
+@@ -198,7 +199,7 @@
+     def send(self, user_message: str, max_tokens: int = 1024) -> str:
+         self.history.append({"role": "user", "content": user_message})
+         response = client.messages.create(
+-            model="claude-sonnet-4-20250514",
++            model=MODEL,
+             max_tokens=max_tokens,
+             system=self.system,
+             messages=self.history
+diff -ruN orig/templates/AUDIT_PROMPTS.md patched/templates/AUDIT_PROMPTS.md
+--- orig/templates/AUDIT_PROMPTS.md	2026-09-25 16:28:08.245062977 +0000
++++ patched/templates/AUDIT_PROMPTS.md	2026-09-25 16:30:52.254607308 +0000
+@@ -70,6 +70,19 @@
+ 
+ ---
+ 
++## Pre-seeded findings (optional)
++
++*Known or suspected issues the auditors MUST verify and mark
++CONFIRMED / FALSE POSITIVE / PARTIAL in their report. Use for existing
++codebases entering the pipeline for the first time.*
++
++```
++PRE_SEEDED:
++- PRE-01 · [file or area] · [suspected issue] · [expected fix]
++```
++
++---
++
+ ## Pass threshold overrides
+ 
+ *Change these values if your project requires stricter or looser standards.*
+@@ -81,9 +94,10 @@
+   max_iterations: 3       # re-audit up to N times before giving up
+ ```
+ 
+-To apply custom thresholds:
++The pipeline injects this whole file into every agent's context. The CLI
++flags still control the pipeline's own verdict:
+ ```bash
+-python scripts/audit_pipeline.py --threshold 90 --max-iter 2
++audit --threshold 90 --max-iter 2
+ ```
+ 
+ ---
+diff -ruN orig/templates/TICKETS.md patched/templates/TICKETS.md
+--- orig/templates/TICKETS.md	1970-01-01 00:00:00.000000000 +0000
++++ patched/templates/TICKETS.md	2026-09-25 16:30:52.232171385 +0000
+@@ -0,0 +1,11 @@
++# Tickets — ownership ledger
++*Required when more than one tool (Claude Code, OpenCode) writes to the repo.*
++*Rules: one ticket = one owner = one branch `fix/<ID>-<slug>`. Writer ≠ reviewer.*
++*Never edit files of a ticket you don't own. Update the row on every state change.*
++
++| ID | Prio | Files | Fix | Acceptance | Owner | Reviewer | Branch | Status | Verdict |
++|----|------|-------|-----|------------|-------|----------|--------|--------|---------|
++| T-001 | P0 | `path/file.py` | [one line] | [test/command that proves it] | claude-code | opencode | fix/T-001-slug | todo | — |
++
++*Status: todo / in-progress / in-review / merged / wontfix*
++*Verdict: APPROVED / APPROVED WITH NOTES / BLOCKED*
