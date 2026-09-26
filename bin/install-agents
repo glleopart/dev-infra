@@ -124,20 +124,36 @@ if [[ "$INSTALL_OPENCODE" == true ]]; then
 
     for f in "${AGENT_FILES[@]}"; do
       name=$(basename "$f")
-      # OpenCode needs 'anthropic/claude-X' model string format.
-      # Transform: 'model: claude-X' → 'model: anthropic/claude-X'
-      # The commented OpenCode model line in each file is the source of truth.
-      # We activate it and deactivate the Claude Code line.
-      sed \
-        -e 's/^model: claude-/model: anthropic\/claude-/' \
-        -e 's/^# model: anthropic\//model: anthropic\//' \
-        "$f" | \
-        # Remove the now-redundant duplicate model line if both exist
-        awk '
-          /^model:/ { if (seen_model++) next }
-          { print }
-        ' \
-        > "$OPENCODE_DIR/$name"
+      # OpenCode uses a different frontmatter schema than Claude Code:
+      #   model  -> full provider id, taken from the "# opencode-model:" line
+      #   tools  -> map of booleans (write/edit/bash), not a list of tool names
+      #   mode   -> primary (orchestrator, tutor) | subagent (everything else)
+      # Claude-Code-only keys (maxTurns, effort, mcp__*) are dropped.
+      python3 - "$f" "$OPENCODE_DIR/$name" <<'PY'
+import json, re, sys
+from pathlib import Path
+src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+text = src.read_text(encoding="utf-8")
+m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+if not m:
+    sys.exit(f"no frontmatter in {src}")
+fm, body = m.group(1), m.group(2)
+name = re.search(r"^name:\s*(\S+)", fm, re.M).group(1)
+desc = re.search(r"^description:\s*>?\s*\n((?:[ \t]+.*\n?)+)", fm, re.M)
+desc = " ".join(l.strip() for l in desc.group(1).splitlines()) if desc else name
+oc_model = re.search(r"^#\s*opencode-model:\s*(\S+)", fm, re.M)
+tools = set(re.findall(r"^\s*-\s*([A-Za-z]+)", fm, re.M))
+mode = "primary" if name in {"orchestrator", "tutor"} else "subagent"
+out = ["---", f"description: {json.dumps(desc, ensure_ascii=False)}", f"mode: {mode}"]
+if oc_model:
+    out.append(f"model: {oc_model.group(1)}")
+out += ["tools:",
+        f"  write: {str('Write' in tools).lower()}",
+        f"  edit: {str('Edit' in tools).lower()}",
+        f"  bash: {str('Bash' in tools).lower()}",
+        "---", ""]
+dst.write_text("\n".join(out) + body, encoding="utf-8")
+PY
       ok "$name"
     done
   else

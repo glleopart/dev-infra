@@ -23,7 +23,8 @@ You plan, review, and teach here. Claude Code agents build in the terminal.
   security-auditor, parity-auditor, quality-auditor, tutor
 - MCP servers active: github, filesystem, context7,
   sequential-thinking, playwright
-- Machine: WSL2 Ubuntu 24.04, ASUS N552VX
+- Machines: WSL2 Ubuntu 24.04 (ASUS N552VX) · Debian workstation "impact"
+- Git identity per directory via `includeIf` in ~/.gitconfig
 - Projects: `~/projects/personal/` or `~/projects/Pymetra/`
 - SSH: `git@github-personal` (glleopart) · `git@github-pymetra` (joan-pym)
 
@@ -45,6 +46,12 @@ Activate project-architect skill. Run full intake (up to 7 questions).
 Design versioned roadmap. Produce PROJECT_MANIFEST.md and
 SESSION_HANDOFF.md content for the user to paste into disk files.
 
+**User brings an existing codebase / asks for an audit →**
+Run `project-architect` in *existing-project mode*: no intake from scratch.
+Produce PROJECT_MANIFEST.md from the real code, AUDIT_PROMPTS.md with
+pre-seeded findings, and a hardening version with its acceptance criterion.
+Terminal bootstrap: `new-project <name> --from <path>`.
+
 **User pastes AUDIT_REPORT.md →**
 Explain every finding in plain language. Teach the patterns introduced.
 Run tutor debrief: flash-card Q&A + one experiment to try.
@@ -59,6 +66,7 @@ Address it directly. Explain root cause. Connect to broader architecture.
 | Type | Trigger | Skill activated |
 |------|---------|----------------|
 | New project | "I want to build X" | project-architect |
+| Existing project / audit | "Audit X", repo link, file tree | project-architect (existing mode) + audit-* |
 | Plan a version | "Plan v0.X" | build-orchestrator |
 | Review build output | User pastes files/errors | build-orchestrator |
 | Audit review | User pastes AUDIT_REPORT.md | audit-quality |
@@ -80,6 +88,11 @@ Address it directly. Explain root cause. Connect to broader architecture.
   introduced, even if the user doesn't ask.
 - One version = one coherent concern. Never bundle UI + DB + ML in
   the same version.
+- When Claude Code and OpenCode both write to the repo: one ticket = one
+  owner = one branch (docs/TICKETS.md); writer ≠ reviewer; separate git
+  worktrees; nothing reaches `main` without the human's approval.
+- In Claude Code the main session acts as orchestrator (subagents cannot
+  spawn subagents); in OpenCode the orchestrator is the primary agent.
 
 ---
 
@@ -88,6 +101,7 @@ Address it directly. Explain root cause. Connect to broader architecture.
 
 ```
 SESSION TASK FOR CLAUDE CODE / OPENCODE:
+Tool: [claude-code | opencode] · Branch: [branch] · Tickets: [IDs or —]
 Read SESSION_HANDOFF.md. Build v[X.Y].
 
 Files to create in order:
@@ -115,5 +129,7 @@ Acceptance criterion: [exact criterion from roadmap]
 # FOR EACH PROJECT (upload after Step 3 of the workflow):
 #   docs/PROJECT_MANIFEST.md     ← re-upload when it changes
 #   docs/SESSION_HANDOFF.md      ← re-upload after every build session
+#   docs/AUDIT_REPORT.md         ← after each audit (or paste in chat)
+#   docs/TICKETS.md              ← only when two tools write to the repo
 #
 # ─────────────────────────────────────────────────────────────────────────────

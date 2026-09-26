@@ -8,11 +8,11 @@ description: >
   for", or when the orchestrator delegates a task. Never activate without
   a file spec — ask for one if none is provided.
 
-# Claude Code model string:
-model: claude-sonnet-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: sonnet
 
-# OpenCode model string:
-# model: anthropic/claude-sonnet-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-sonnet-5
 
 tools:
   - Read
@@ -141,6 +141,10 @@ fails a mandatory check.
 ---
 
 ## Rules you never break
+
+- Check the branch before writing: it must match the spec/ticket branch
+  (`git branch --show-current`). If `docs/TICKETS.md` exists, only touch
+  files listed in a ticket owned by the tool you are running in.
 
 - One file per invocation. Do not implement two files in one response.
 - Do not invent imports. If a module does not exist, report it.

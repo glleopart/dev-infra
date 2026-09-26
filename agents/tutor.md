@@ -10,11 +10,11 @@ description: >
   way", "I don't understand X", or "learning debrief". Also activate
   proactively if the user asks a technical question during building.
 
-# Claude Code model string:
-model: claude-opus-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: opus
 
-# OpenCode model string:
-# model: anthropic/claude-opus-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-opus-5-5
 
 tools:
   - Read

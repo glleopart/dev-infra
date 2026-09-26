@@ -70,6 +70,19 @@ AGENT_3_ADDITIONAL:
 
 ---
 
+## Pre-seeded findings (optional)
+
+*Known or suspected issues the auditors MUST verify and mark
+CONFIRMED / FALSE POSITIVE / PARTIAL in their report. Use for existing
+codebases entering the pipeline for the first time.*
+
+```
+PRE_SEEDED:
+- PRE-01 · [file or area] · [suspected issue] · [expected fix]
+```
+
+---
+
 ## Pass threshold overrides
 
 *Change these values if your project requires stricter or looser standards.*
@@ -81,9 +94,10 @@ THRESHOLDS:
   max_iterations: 3       # re-audit up to N times before giving up
 ```
 
-To apply custom thresholds:
+The pipeline injects this whole file into every agent's context. The CLI
+flags still control the pipeline's own verdict:
 ```bash
-python scripts/audit_pipeline.py --threshold 90 --max-iter 2
+audit --threshold 90 --max-iter 2
 ```
 
 ---

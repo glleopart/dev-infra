@@ -86,7 +86,8 @@ FOR EACH VERSION:
     $ audit
     → security-auditor (Agent 1) → parity-auditor (Agent 2) → quality-auditor (Agent 3)
     → docs/AUDIT_REPORT.md written
-    → loop until avg ≥ 85 or max 3 iterations
+    → project rules from docs/AUDIT_PROMPTS.md are injected into every agent
+    → fix P0/P1, re-run until avg ≥ 85
 
   STEP D — LEARN (claude.ai)
     tutor explains patterns, code decisions, concepts introduced
@@ -111,10 +112,10 @@ chmod +x ~/.dev-infra/bin/new-project \
          ~/.dev-infra/bin/audit \
          ~/.dev-infra/bin/install-agents
 
-# 3. Add to ~/.zshrc
+# 3. Add to ~/.zshrc (API key only for `audit --api`; keep it in ~/.secrets)
 export DEV_INFRA_DIR="$HOME/.dev-infra"
 export PATH="$DEV_INFRA_DIR/bin:$PATH"
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+[[ -f "$HOME/.secrets" ]] && source "$HOME/.secrets"
 
 # 4. Reload and install Python deps
 source ~/.zshrc
@@ -143,11 +144,13 @@ new-project my-app-name
 
 ```zsh
 # From anywhere inside a project
-audit                   # full run, auto-detects root
+audit                   # single pass via `claude` CLI, auto-detects root
+audit --api             # use the Anthropic API instead (needs key)
 audit --score           # print last result, no API calls
-audit --dry-run         # list files that would be sent
+audit --dry-run         # list files that would be sent (+ omitted ones)
 audit --threshold 90    # stricter pass bar (default: 85)
-audit --max-iter 1      # single pass, no retry
+audit --max-iter 2      # pause for fixes, then re-audit fresh code
+audit --max-files 200   # raise the file budget for large repos
 ```
 
 ---
@@ -156,7 +159,7 @@ audit --max-iter 1      # single pass, no retry
 
 | Agent | Model | Invoke in Claude Code | Invoke in OpenCode |
 |-------|-------|-----------------------|--------------------|
-| orchestrator | Opus | `/agents → orchestrator` | `@orchestrator` |
+| orchestrator | opus | main session (via CLAUDE.md) | `@orchestrator` (primary) |
 | builder | Sonnet | Delegated by orchestrator | `@builder` |
 | security-auditor | Sonnet | Via `audit` command | Via `audit` command |
 | parity-auditor | Sonnet | Via `audit` command | Via `audit` command |
@@ -205,8 +208,8 @@ install-agents          # re-sync agents to Claude Code and OpenCode
 
 ## Requirements
 
-- Python 3.9+: `pip install anthropic tenacity`
-- `ANTHROPIC_API_KEY` set in environment
+- Python 3.9+ in a pyenv/conda env: `pip install anthropic tenacity pip-licenses`
+- `claude` CLI (default audit mode) or `ANTHROPIC_API_KEY` in ~/.secrets (`--api`)
 - Claude Code and/or OpenCode installed
 
 ---

@@ -84,7 +84,7 @@ echo "→ Installing docs templates..."
 mkdir -p docs
 
 # Only copy if the file doesn't already exist (don't overwrite manual work)
-for tmpl in PROJECT_MANIFEST SESSION_HANDOFF AUDIT_PROMPTS VERSION_PLAN; do
+for tmpl in PROJECT_MANIFEST SESSION_HANDOFF AUDIT_PROMPTS VERSION_PLAN TICKETS; do
   src="$INFRA_DIR/templates/${tmpl}.md"
   dst="docs/${tmpl}.md"
   if [[ -f "$dst" ]]; then
@@ -202,13 +202,13 @@ echo ""
 echo "  Next steps:"
 echo ""
 echo "  1. Open a new Claude project at claude.ai"
-echo "  2. Upload these 6 skill files in Project Settings → Skills:"
-echo "     $INFRA_DIR/skills/project-architect/SKILL.md"
-echo "     $INFRA_DIR/skills/build-orchestrator/SKILL.md"
-echo "     $INFRA_DIR/skills/audit-security/SKILL.md"
-echo "     $INFRA_DIR/skills/audit-parity/SKILL.md"
-echo "     $INFRA_DIR/skills/audit-quality/SKILL.md"
-echo "     $INFRA_DIR/skills/ml-integration/SKILL.md"
+echo "  2. Upload these 6 skill files in Project Settings → Knowledge:"
+echo "     $INFRA_DIR/skills/project-architect.md"
+echo "     $INFRA_DIR/skills/build-orchestrator.md"
+echo "     $INFRA_DIR/skills/audit-security.md"
+echo "     $INFRA_DIR/skills/audit-parity.md"
+echo "     $INFRA_DIR/skills/audit-quality.md"
+echo "     $INFRA_DIR/skills/ml-integration.md"
 echo ""
 echo "  3. Paste this as your first message in Claude:"
 echo ""

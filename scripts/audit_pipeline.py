@@ -10,13 +10,20 @@ Usage:
 Requires:
     pip install anthropic tenacity
 
+Modes:
+    default  — `claude -p` CLI (claude.ai subscription, no API credits)
+    --api    — Anthropic API (requires ANTHROPIC_API_KEY)
+
 Environment:
-    ANTHROPIC_API_KEY  — required
+    ANTHROPIC_API_KEY  — only with --api
+    AUDIT_MODEL        — API model id   (default: claude-sonnet-5)
+    AUDIT_CLI_MODEL    — CLI model alias (default: sonnet)
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -26,19 +33,21 @@ try:
     import anthropic
     from tenacity import retry, stop_after_attempt, wait_exponential
 except ImportError:
-    import subprocess
-    print("Installing missing dependencies...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "anthropic", "tenacity", "-q"])
-    import anthropic
-    from tenacity import retry, stop_after_attempt, wait_exponential
+    # No silent `pip install`: it fails on PEP 668 systems (Ubuntu 24.04) and
+    # mutates whatever interpreter happens to be active.
+    sys.exit(
+        "Missing dependency: pip install anthropic tenacity  "
+        "(in a venv/pyenv/conda env — not the system Python)"
+    )
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 PASS_THRESHOLD = 85          # average score required to pass
 MIN_AGENT_SCORE = 70         # each individual agent must score at least this
-MAX_FILE_CHARS = 8_000       # max chars per source file sent to agents
-MAX_FILES = 40               # max number of source files included
-MODEL = "claude-sonnet-4-6"
+MAX_FILE_CHARS = 12_000      # max chars per source file (override: --max-file-chars)
+MAX_FILES = 120              # max source files included (override: --max-files)
+MODEL = os.environ.get("AUDIT_MODEL", "claude-sonnet-5")       # never hardcode ids
+CLI_MODEL = os.environ.get("AUDIT_CLI_MODEL", "sonnet")        # claude CLI alias
 MAX_TOKENS = 4096
 USE_API = False  # set by --api flag
 
@@ -47,8 +56,19 @@ CODE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
     ".cpp", ".c", ".h", ".cs", ".rb", ".php", ".swift", ".kt",
     ".vue", ".svelte", ".html", ".css", ".scss",
-    ".json", ".yaml", ".yml", ".toml", ".env.example",
-    ".md", ".txt", ".sh",
+    ".json", ".yaml", ".yml", ".toml", ".sh", ".conf",
+}
+# Docs/prose are NOT source: they burn the budget and bias the auditors.
+# Always include these by exact name even though their suffix is excluded.
+ALWAYS_INCLUDE = {
+    ".env.example", "Makefile", "Dockerfile", "docker-compose.yml",
+    "requirements.txt", "requirements-dev.txt", "nginx.conf", ".gitignore",
+    ".dockerignore",
+}
+# Generated/huge files that add nothing to an audit
+SKIP_FILES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
+    "Pipfile.lock", "uv.lock",
 }
 
 # Directories to always skip
@@ -79,14 +99,23 @@ def collect_files(root: Path, manifest_path: Path) -> dict[str, str]:
             parts = rel.parts
             if any(p in SKIP_DIRS for p in parts):
                 continue
-            if path.suffix.lower() in CODE_EXTENSIONS or path.name in {
-                ".env.example", "Makefile", "Dockerfile", "docker-compose.yml"
-            }:
+            if path.name in SKIP_FILES:
+                continue
+            if path.suffix.lower() in CODE_EXTENSIONS or path.name in ALWAYS_INCLUDE:
                 all_paths.append(rel)
 
     # Sort: priority files first, then alphabetical
     all_paths.sort(key=lambda p: (str(p) not in priority_paths, str(p)))
+    omitted = [str(p) for p in all_paths[MAX_FILES:]]
     all_paths = all_paths[:MAX_FILES]
+    if omitted:
+        # Tell the agents explicitly so they mark these UNREVIEWED instead of
+        # silently scoring code they never saw.
+        files["__OMITTED_FILES__"] = (
+            f"{len(omitted)} files exceeded the MAX_FILES budget and were NOT sent. "
+            "Mark any finding that depends on them as UNREVIEWED:\n"
+            + "\n".join(omitted)
+        )
 
     for rel in all_paths:
         full = root / rel
@@ -115,6 +144,14 @@ def extract_paths_from_manifest(manifest_path: Path) -> set[str]:
         if "/" in stripped and "." in stripped.split("/")[-1]:
             paths.add(stripped)
     return paths
+
+
+def load_audit_prompts(manifest_path: Path) -> str:
+    """Project-specific rules from docs/AUDIT_PROMPTS.md (next to the manifest)."""
+    path = manifest_path.parent / "AUDIT_PROMPTS.md"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def format_files_for_prompt(files: dict[str, str]) -> str:
@@ -251,28 +288,37 @@ P3 (track as issues): [list]
 
 # ── API call with retry ───────────────────────────────────────────────────────
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+_client = None
 
 
-import subprocess
+def get_client() -> "anthropic.Anthropic":
+    """Create the API client lazily so CLI mode never needs a key."""
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return _client
+
 
 def call_agent_cli(system: str, user_message: str, label: str) -> str:
     """Call Claude via CLI --uses claude.ai subscription, no API credits."""
     print(f"  Calling {label} (CLI)...", end="", flush=True)
-    import time; start = time.time()
+    start = time.time()
     combined = f"<instructions>\n{system}\n</instructions>\n\n<task>\n{user_message}\n</task>"
-    env = __import__("os").environ.copy()
+    env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)
     try:
         result = subprocess.run(
-            ["claude", "-p"],
+            ["claude", "-p", "--model", CLI_MODEL],
             input=combined,
             capture_output=True, text=True, env=env, timeout=600,
         )
     except FileNotFoundError:
         print("\nERROR: claude CLI not found. Use --api flag instead.")
-        __import__("sys").exit(1)
+        sys.exit(1)
     elapsed = time.time() - start
+    if result.returncode != 0 or not result.stdout.strip():
+        print(f"\nERROR: claude CLI failed (exit {result.returncode}):\n{result.stderr[-2000:]}")
+        sys.exit(1)
     print(f" done ({elapsed:.1f}s)")
     return result.stdout.strip()
 
@@ -281,7 +327,7 @@ def _call_agent_api(system: str, user_message: str, label: str) -> str:
     """Call Claude API directly. Requires ANTHROPIC_API_KEY with credits."""
     print(f"  Calling {label}...", end="", flush=True)
     start = time.time()
-    response = client.messages.create(
+    response = get_client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=system,
@@ -480,6 +526,12 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
     if manifest_path.exists():
         manifest_content = manifest_path.read_text(encoding="utf-8", errors="replace")
 
+    project_rules = load_audit_prompts(manifest_path)
+    rules_block = (
+        f"PROJECT-SPECIFIC AUDIT RULES (docs/AUDIT_PROMPTS.md — apply on top of your rubric, "
+        f"including thresholds and pre-seeded findings to verify):\n```\n{project_rules}\n```\n\n"
+        if project_rules else ""
+    )
     code_block = format_files_for_prompt(files)
 
     if dry_run:
@@ -496,10 +548,16 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
 
     for iteration in range(1, max_iterations + 1):
         print(f"\n── Iteration {iteration}/{max_iterations} ──────────────────")
+        if iteration > 1:
+            # Re-read the code: auditing unchanged code again only burns credits
+            # and produces noisy, non-deterministic scores.
+            files = collect_files(root, manifest_path)
+            code_block = format_files_for_prompt(files)
 
         # ── Agent 1 ──────────────────────────────────────────────────────────
         print("\nAgent 1 — Security & Architecture")
         a1_user = (
+            f"{rules_block}"
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
@@ -513,6 +571,7 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
         a2_user = (
             f"AGENT 1 CONTEXT:\n{a2_context}\n\n"
             f"AGENT 1 FULL OUTPUT:\n```\n{a1_output}\n```\n\n"
+            f"{rules_block}"
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
@@ -529,6 +588,7 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
             f"AGENT 2 SCORE: {a2_score}/100\n\n"
             f"AGENT 1 OUTPUT:\n```\n{a1_output}\n```\n\n"
             f"AGENT 2 OUTPUT:\n```\n{a2_output}\n```\n\n"
+            f"{rules_block}"
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
@@ -566,9 +626,12 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
 
         if iteration < max_iterations:
             print(f"\n  Score below threshold ({avg:.1f} < {PASS_THRESHOLD})")
-            print("  Review the findings and fix P0/P1 issues, then re-run.")
-            print("  (Pipeline will retry automatically in next iteration)")
-            time.sleep(2)
+            if not sys.stdin.isatty():
+                print("  Non-interactive run: stopping. Fix P0/P1 and re-run `audit`.")
+                break
+            reply = input("  Fix P0/P1 now, then press Enter to re-audit (q = stop): ")
+            if reply.strip().lower() == "q":
+                break
 
     # Write report
     report_path = manifest_path.parent / "AUDIT_REPORT.md"
@@ -593,7 +656,7 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    global PASS_THRESHOLD
+    global PASS_THRESHOLD, USE_API, MAX_FILES, MAX_FILE_CHARS
     parser = argparse.ArgumentParser(
         description="3-agent automated code audit pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -607,8 +670,8 @@ def main():
     parser.add_argument(
         "--max-iter",
         type=int,
-        default=3,
-        help="Maximum audit iterations before giving up (default: 3)",
+        default=1,
+        help="Audit iterations; >1 pauses for fixes between runs (default: 1)",
     )
     parser.add_argument(
         "--dry-run",
@@ -622,9 +685,22 @@ def main():
         help=f"Pass score threshold (default: {PASS_THRESHOLD})",
     )
 
+    parser.add_argument(
+        "--api",
+        action="store_true",
+        help="Use the Anthropic API instead of the claude CLI (needs ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument("--max-files", type=int, default=MAX_FILES,
+                        help=f"Max source files sent (default: {MAX_FILES})")
+    parser.add_argument("--max-file-chars", type=int, default=MAX_FILE_CHARS,
+                        help=f"Max chars per file (default: {MAX_FILE_CHARS})")
+
     args = parser.parse_args()
 
     PASS_THRESHOLD = args.threshold
+    USE_API = args.api
+    MAX_FILES = args.max_files
+    MAX_FILE_CHARS = args.max_file_chars
 
     manifest_path = Path(args.manifest)
     if not manifest_path.exists() and not args.dry_run:

@@ -196,33 +196,31 @@ try:
 except FileNotFoundError:
     target = {}
 
-# Build clean mcpServers in OpenCode format
-# Differences from Claude Code:
-#   - env is array of "KEY=value" strings (not an object)
-#   - explicit "type": "stdio"
+# Build servers in OpenCode's schema (https://opencode.ai/config.json):
+#   top-level key "mcp" (NOT "mcpServers"), each server:
+#   {"type": "local", "command": [cmd, *args], "environment": {...}, "enabled": true}
+# Secrets are NOT written in plaintext: OpenCode resolves {env:VAR} at runtime,
+# so GITHUB_TOKEN must be exported in the shell that launches opencode.
 clean_servers = {}
 for name, cfg in source.get("mcpServers", {}).items():
     if name.startswith("_"):
         continue
-    clean = {"type": "stdio"}
-    if "command" in cfg:
-        clean["command"] = cfg["command"]
-    if "args" in cfg:
-        clean["args"] = [
-            a.replace("\${PROJECTS_DIR}", projects_dir) for a in cfg["args"]
-        ]
-    if "env" in cfg and cfg["env"]:
-        env_list = []
-        for k, v in cfg["env"].items():
-            resolved = v.replace("\${GITHUB_TOKEN}", github_token)
-            resolved = resolved.replace("\${PROJECTS_DIR}", projects_dir)
-            env_list.append(f"{k}={resolved}")
-        if env_list:
-            clean["env"] = env_list
+    command = [cfg["command"]] + [
+        a.replace("\${PROJECTS_DIR}", projects_dir) for a in cfg.get("args", [])
+    ]
+    clean = {"type": "local", "command": command, "enabled": True}
+    env = {}
+    for k, v in (cfg.get("env") or {}).items():
+        v = v.replace("\${GITHUB_TOKEN}", "{env:GITHUB_TOKEN}")
+        env[k] = v.replace("\${PROJECTS_DIR}", projects_dir)
+    if env:
+        clean["environment"] = env
     clean_servers[name] = clean
 
-# Merge into target
-target["mcpServers"] = {**target.get("mcpServers", {}), **clean_servers}
+# Merge into target; drop the invalid legacy key written by older versions
+target.pop("mcpServers", None)
+target.setdefault("\$schema", "https://opencode.ai/config.json")
+target["mcp"] = {**target.get("mcp", {}), **clean_servers}
 
 with open(target_path, "w") as f:
     json.dump(target, f, indent=2)

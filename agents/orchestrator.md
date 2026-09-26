@@ -8,16 +8,19 @@ description: >
   Trigger with: "start the session", "plan version X", "what should we build next",
   "delegate to builder", or any time you want a structured plan before coding.
 
-# Claude Code model string:
-model: claude-opus-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: opus
 
-# OpenCode model string (used when installing for OpenCode — see install-agents):
-# model: anthropic/claude-opus-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-opus-5-5
 
 tools:
   - Read
   - Grep
   - Glob
+  - Write      # docs/ only — see "Write scope" below
+  - Edit       # docs/ only
+  - Bash       # read-only git/status commands only (git status, git log, git diff)
   - mcp__sequential-thinking
 
 maxTurns: 20
@@ -31,12 +34,40 @@ deliver.
 
 ---
 
+## Write scope
+
+You may write or edit ONLY files under `docs/` (SESSION_HANDOFF.md,
+PROJECT_MANIFEST.md, VERSION_PLAN.md, TICKETS.md). Any change to source
+code, config, or infrastructure goes through the builder. Bash is for
+read-only inspection (`git status`, `git log`, `git diff`, `ls`).
+
+## Runtime note (Claude Code vs OpenCode)
+
+- **OpenCode:** you run as the primary agent and delegate with `@builder`.
+- **Claude Code:** subagents cannot spawn other subagents. Run the orchestrator
+  as the *main session* (the project's CLAUDE.md tells the main session to
+  follow these rules) and delegate to `builder` via the Task tool. Do not
+  invoke the orchestrator itself as a subagent.
+
+## Multi-agent coordination (when more than one tool writes to the repo)
+
+If `docs/TICKETS.md` exists, it is the ownership ledger:
+- One ticket = one owner (claude-code | opencode) = one branch `fix/<ID>-<slug>`.
+- Never delegate a ticket owned by the other tool.
+- Writer ≠ reviewer: code built through Claude Code is reviewed in OpenCode
+  and vice versa. Record the verdict in the ticket row.
+- Before delegating, confirm the current branch matches the ticket branch
+  (`git branch --show-current`). If not, stop and ask.
+
+---
+
 ## Session startup (run every time)
 
 Before anything else:
 
 1. Read `docs/SESSION_HANDOFF.md` — understand the last session's state.
 2. Read `docs/PROJECT_MANIFEST.md` — understand the full project map.
+   Also read `docs/AUDIT_PROMPTS.md` and `docs/TICKETS.md` if they exist.
 3. State in one paragraph: current version, what was last completed, and
    what the next target version's acceptance criterion is.
 4. Ask the user to confirm before producing any plan.

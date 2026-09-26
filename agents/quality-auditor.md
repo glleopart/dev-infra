@@ -9,11 +9,11 @@ description: >
   parity-auditor via the audit pipeline. Requires both prior agents'
   outputs as context.
 
-# Claude Code model string:
-model: claude-sonnet-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: sonnet
 
-# OpenCode model string:
-# model: anthropic/claude-sonnet-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-sonnet-5
 
 tools:
   - Read
@@ -110,24 +110,16 @@ find . \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" \) \
 
 ### Python dependencies
 ```bash
-# Generate license list
-if command -v pip &>/dev/null; then
-  pip show $(pip freeze 2>/dev/null | cut -d= -f1) 2>/dev/null | \
-    grep -E "^(Name|License):" | paste - - | \
-    awk '{print $2, "|", $4}' | sort
-fi
+# Direct deps only, with licenses (install once: pip install pip-licenses)
+python3 -m piplicenses --from=mixed --format=markdown --with-urls 2>/dev/null \
+  || echo "pip-licenses not installed: pip install pip-licenses"
 ```
 
 ### Node dependencies
 ```bash
-# Quick license summary
+# Production deps only
 if [ -f package.json ]; then
-  cat package.json | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-deps = {**d.get('dependencies', {}), **d.get('devDependencies', {})}
-for k in sorted(deps): print(k)
-  " 2>/dev/null | head -40
+  npx --yes license-checker --production --summary 2>/dev/null | head -40
 fi
 ```
 

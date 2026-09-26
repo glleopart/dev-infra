@@ -127,11 +127,12 @@ import os
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-5")  # never hardcode model ids
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
 def complete(prompt: str, system: str = "", max_tokens: int = 1024) -> str:
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=MODEL,
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": prompt}]
@@ -188,7 +189,7 @@ Use for: chatbots, multi-turn assistants.
 
 ```python
 # ai/llm/chat.py
-from .client import client
+from .client import client, MODEL
 
 class ChatSession:
     def __init__(self, system: str = ""):
@@ -198,7 +199,7 @@ class ChatSession:
     def send(self, user_message: str, max_tokens: int = 1024) -> str:
         self.history.append({"role": "user", "content": user_message})
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=MODEL,
             max_tokens=max_tokens,
             system=self.system,
             messages=self.history

@@ -9,11 +9,11 @@ description: >
   after security-auditor via the audit pipeline. Requires the security-
   auditor's output as context — do not run without it.
 
-# Claude Code model string:
-model: claude-sonnet-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: sonnet
 
-# OpenCode model string:
-# model: anthropic/claude-sonnet-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-sonnet-5
 
 tools:
   - Read

@@ -53,23 +53,23 @@ if [[ "$1" == "--score" ]]; then
   exit 0
 fi
 
-# ── Check ANTHROPIC_API_KEY ────────────────────────────────────────────────────
-if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-  # Try loading from project .env
-  if [[ -f "$PROJECT_ROOT/.env" ]]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
-  fi
-  # Try loading from ~/.dev-infra/.env
+# ── API key: only needed with --api (default mode uses the `claude` CLI) ──────
+# Never read the PROJECT's .env: in app repos it holds the application's own key.
+# Tooling key lives in ~/.secrets (chmod 600) or $DEV_INFRA_DIR/.env.
+if [[ " $* " == *" --api "* ]] && [[ -z "$ANTHROPIC_API_KEY" ]]; then
   INFRA_DIR="${DEV_INFRA_DIR:-$HOME/.dev-infra}"
-  if [[ -z "$ANTHROPIC_API_KEY" ]] && [[ -f "$INFRA_DIR/.env" ]]; then
-    export $(grep -v '^#' "$INFRA_DIR/.env" | grep ANTHROPIC_API_KEY | xargs) 2>/dev/null || true
-  fi
+  for f in "$HOME/.secrets" "$INFRA_DIR/.env"; do
+    if [[ -z "$ANTHROPIC_API_KEY" ]] && [[ -f "$f" ]]; then
+      export ANTHROPIC_API_KEY="$(grep -E '^(export )?ANTHROPIC_API_KEY=' "$f" | tail -1 | cut -d= -f2- | tr -d "\"'")"
+    fi
+  done
   if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-    echo "ERROR: ANTHROPIC_API_KEY is not set."
-    echo "  Set it in your shell: export ANTHROPIC_API_KEY=sk-ant-..."
-    echo "  Or add it to $PROJECT_ROOT/.env"
+    echo "ERROR: --api requires ANTHROPIC_API_KEY (set it in ~/.secrets or \$DEV_INFRA_DIR/.env)."
     exit 1
   fi
+elif [[ " $* " != *" --api "* ]] && ! command -v claude &>/dev/null; then
+  echo "ERROR: default mode uses the 'claude' CLI, which is not installed. Use --api."
+  exit 1
 fi
 
 # ── Check Python deps ──────────────────────────────────────────────────────────
@@ -93,11 +93,12 @@ echo "→ Running audit pipeline..."
 echo ""
 
 cd "$PROJECT_ROOT"
+set +e   # capture the pipeline's exit code instead of aborting
 python3 scripts/audit_pipeline.py \
   --manifest "$MANIFEST" \
   "$@"
-
 EXIT_CODE=$?
+set -e
 
 # ── Print summary location ─────────────────────────────────────────────────────
 if [[ -f "$PROJECT_ROOT/docs/AUDIT_REPORT.md" ]]; then

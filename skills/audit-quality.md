@@ -79,8 +79,7 @@ find . -name "*.py" -o -name "*.ts" -o -name "*.js" | \
 
 **Python:**
 ```bash
-pip show $(pip freeze | cut -d= -f1) 2>/dev/null | grep -E "^(Name|License):" | \
-  paste - - | awk '{print $2, $4}'
+python3 -m piplicenses --from=mixed --format=markdown
 ```
 
 **Node:**

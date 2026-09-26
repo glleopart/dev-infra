@@ -109,7 +109,7 @@ When version is done, orchestrator updates SESSION_HANDOFF.md on disk.
 ### PHASE C — AUDIT (terminal)
 
 ```zsh
-audit                    # runs 3 agents, writes docs/AUDIT_REPORT.md
+audit                    # runs 3 agents (+ docs/AUDIT_PROMPTS.md rules), writes docs/AUDIT_REPORT.md
 audit --score            # check result
 ```
 

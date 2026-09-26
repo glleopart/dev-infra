@@ -25,12 +25,12 @@ Your final structure should be:
 │   ├── audit_pipeline.py
 │   └── generate_manifest.py
 ├── skills/
-│   ├── project-architect/SKILL.md
-│   ├── build-orchestrator/SKILL.md
-│   ├── audit-security/SKILL.md
-│   ├── audit-parity/SKILL.md
-│   ├── audit-quality/SKILL.md
-│   └── ml-integration/SKILL.md
+│   ├── project-architect.md
+│   ├── build-orchestrator.md
+│   ├── audit-security.md
+│   ├── audit-parity.md
+│   ├── audit-quality.md
+│   └── ml-integration.md
 └── templates/
     ├── PROJECT_MANIFEST.md
     ├── SESSION_HANDOFF.md
@@ -58,12 +58,10 @@ Open your `~/.zshrc` in any editor and add these lines at the bottom:
 export DEV_INFRA_DIR="$HOME/.dev-infra"
 export PATH="$DEV_INFRA_DIR/bin:$PATH"
 
-# Anthropic API key (used by the audit pipeline)
-# Option A: hardcode here (simplest)
-export ANTHROPIC_API_KEY="sk-ant-your-key-here"
-
-# Option B: load from a secrets file (more secure — add ~/.secrets to .gitignore)
-# source "$HOME/.secrets"
+# Anthropic API key — ONLY needed for `audit --api` (default mode uses the
+# `claude` CLI and your claude.ai subscription). Never hardcode it here:
+#   echo 'export ANTHROPIC_API_KEY="sk-ant-..."' > ~/.secrets && chmod 600 ~/.secrets
+[[ -f "$HOME/.secrets" ]] && source "$HOME/.secrets"
 ```
 
 Then reload your shell:
@@ -84,14 +82,14 @@ new-project --help
 
 ## Step 4 — Install Python dependencies (once)
 
-The audit pipeline requires two packages:
+The audit pipeline requires two packages. Ubuntu 24.04 blocks `pip install`
+into the system Python (PEP 668), so use your pyenv/conda default env:
 
 ```zsh
-pip install anthropic tenacity
+python3 -m pip install anthropic tenacity pip-licenses
 ```
 
-If you use multiple Python environments, install in whichever Python is your
-default `python3`. Check with: `which python3`.
+`which python3` must point to that env (not /usr/bin/python3).
 
 ---
 
@@ -106,12 +104,12 @@ new Claude project for a new codebase:
 4. Upload these 6 files (drag and drop, or click Add):
 
 ```
-~/.dev-infra/skills/project-architect/SKILL.md
-~/.dev-infra/skills/build-orchestrator/SKILL.md
-~/.dev-infra/skills/audit-security/SKILL.md
-~/.dev-infra/skills/audit-parity/SKILL.md
-~/.dev-infra/skills/audit-quality/SKILL.md
-~/.dev-infra/skills/ml-integration/SKILL.md
+~/.dev-infra/skills/project-architect.md
+~/.dev-infra/skills/build-orchestrator.md
+~/.dev-infra/skills/audit-security.md
+~/.dev-infra/skills/audit-parity.md
+~/.dev-infra/skills/audit-quality.md
+~/.dev-infra/skills/ml-integration.md
 ```
 
 You only need `ml-integration` if the project will use AI. The other 5 are
@@ -231,8 +229,8 @@ alias manifest="open docs/PROJECT_MANIFEST.md 2>/dev/null || cat docs/PROJECT_MA
 → Run `source ~/.zshrc` or open a new terminal tab.
 → Check `echo $PATH` contains `~/.dev-infra/bin`.
 
-**`ERROR: ANTHROPIC_API_KEY is not set`**
-→ Add `export ANTHROPIC_API_KEY="sk-ant-..."` to `~/.zshrc` and `source ~/.zshrc`.
+**`ERROR: --api requires ANTHROPIC_API_KEY`**
+→ Put it in `~/.secrets` (chmod 600). Without `--api`, the `claude` CLI is used and no key is needed.
 
 **`Missing Python dependency: anthropic`**
 → Run `pip install anthropic tenacity`.

@@ -9,11 +9,11 @@ description: >
   "security review", "check for vulnerabilities", or via the audit
   pipeline script. Always runs before parity-auditor.
 
-# Claude Code model string:
-model: claude-sonnet-4-6
+# Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
+model: sonnet
 
-# OpenCode model string:
-# model: anthropic/claude-sonnet-4-6
+# OpenCode model id (read by install-agents; verify with: opencode models anthropic):
+# opencode-model: anthropic/claude-sonnet-5
 
 tools:
   - Read
