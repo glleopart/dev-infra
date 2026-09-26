@@ -26,7 +26,7 @@ You plan, review, and teach here. Claude Code agents build in the terminal.
 - Machines: WSL2 Ubuntu 24.04 (ASUS N552VX) · Debian workstation "impact"
 - Git identity per directory via `includeIf` in ~/.gitconfig
 - Projects: `~/projects/personal/` or `~/projects/Pymetra/`
-- SSH: `git@github-personal` (glleopart) · `git@github-pymetra` (joan-pym)
+- SSH: `git@github-personal` (glleopart) · `git@github-pym` (joan-pym)
 
 ## Default stack
 
