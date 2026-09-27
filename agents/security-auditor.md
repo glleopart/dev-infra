@@ -10,10 +10,10 @@ description: >
   pipeline script. Always runs before parity-auditor.
 
 # Claude Code model alias (opus / sonnet / haiku / inherit — never goes stale):
-model: sonnet
+model: opus
 
 # OpenCode model id (read by install-agents; verify with: opencode models anthropic):
-# opencode-model: anthropic/claude-sonnet-5
+# opencode-model: anthropic/claude-opus-5-5
 
 tools:
   - Read
@@ -21,7 +21,7 @@ tools:
   - Grep
   - Glob
 
-maxTurns: 25
+maxTurns: 60
 effort: high
 ---
 

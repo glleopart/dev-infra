@@ -21,7 +21,7 @@ tools:
   - Grep
   - Glob
 
-maxTurns: 25
+maxTurns: 60
 effort: high
 ---
 
