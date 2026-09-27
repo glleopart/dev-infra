@@ -13,7 +13,7 @@ description: >
 model: sonnet
 
 # OpenCode model id (read by install-agents; verify with: opencode models anthropic):
-# opencode-model: anthropic/claude-sonnet-5
+# opencode-model: opencode-go/qwen3.8-max
 
 tools:
   - Read

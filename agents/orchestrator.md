@@ -12,7 +12,7 @@ description: >
 model: opus
 
 # OpenCode model id (read by install-agents; verify with: opencode models anthropic):
-# opencode-model: anthropic/claude-opus-5-5
+# opencode-model: opencode-go/qwen3.8-max
 
 tools:
   - Read
