@@ -6,6 +6,19 @@ Usage:
     python scripts/audit_pipeline.py --manifest docs/PROJECT_MANIFEST.md
     python scripts/audit_pipeline.py --manifest docs/PROJECT_MANIFEST.md --max-iter 2
     python scripts/audit_pipeline.py --manifest docs/PROJECT_MANIFEST.md --dry-run
+    python scripts/audit_pipeline.py --exclude docs/archive/ --timeout 2400
+    python scripts/audit_pipeline.py --resume      # reuse saved outputs if input unchanged
+    python scripts/audit_pipeline.py --resume-stale  # reuse them even if input changed
+
+Size guard:
+    The pipeline refuses to run when the collected input exceeds MAX_TOTAL_CHARS
+    (250k, override: --max-total-chars). Large repos should be audited with the
+    agent mode instead (security-auditor → parity-auditor → quality-auditor,
+    which read files with tools rather than receiving the whole codebase).
+
+Outputs:
+    docs/audit/agent1.md, agent2.md, agent3.md — saved as each agent finishes
+    docs/AUDIT_REPORT.md                       — combined report at the end
 
 Requires:
     pip install anthropic tenacity
@@ -21,8 +34,10 @@ Environment:
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +65,8 @@ MODEL = os.environ.get("AUDIT_MODEL", "claude-sonnet-5")       # never hardcode 
 CLI_MODEL = os.environ.get("AUDIT_CLI_MODEL", "sonnet")        # claude CLI alias
 MAX_TOKENS = 4096
 USE_API = False  # set by --api flag
+AGENT_TIMEOUT = 1800         # seconds per agent call (override: --timeout)
+MAX_TOTAL_CHARS = 250_000    # refuse larger inputs; use agent mode (override: --max-total-chars)
 
 # File extensions to include in code collection
 CODE_EXTENSIONS = {
@@ -71,12 +88,25 @@ SKIP_FILES = {
     "Pipfile.lock", "uv.lock",
 }
 
-# Directories to always skip
+# Directories to always skip (any depth); includes common vendored-code dirs
 SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", ".venv", "venv", "env",
     "dist", "build", ".next", ".nuxt", "coverage", ".pytest_cache",
     ".mypy_cache", ".ruff_cache", "migrations",
+    "vendor", "vendors", "third_party", "third-party", "external",
 }
+
+# Path prefixes (relative to the project root) to skip: generated or vendored
+# code that is not the project's own (e.g. shadcn/ui copies). Extend with
+# --exclude PREFIX (repeatable).
+SKIP_PATH_PREFIXES = [
+    "frontend/src/components/ui/",
+    "src/components/ui/",
+    "backend/scripts/",   # seeders / one-off tooling, not runtime code
+    "scripts/",           # this pipeline and other project tooling
+    "docs/",              # prose and archived copies, never source
+    ".claude/",           # local agent settings
+]
 
 # ── File collection ───────────────────────────────────────────────────────────
 
@@ -98,6 +128,8 @@ def collect_files(root: Path, manifest_path: Path) -> dict[str, str]:
             rel = path.relative_to(root)
             parts = rel.parts
             if any(p in SKIP_DIRS for p in parts):
+                continue
+            if any(rel.as_posix().startswith(pref) for pref in SKIP_PATH_PREFIXES):
                 continue
             if path.name in SKIP_FILES:
                 continue
@@ -310,10 +342,14 @@ def call_agent_cli(system: str, user_message: str, label: str) -> str:
         result = subprocess.run(
             ["claude", "-p", "--model", CLI_MODEL],
             input=combined,
-            capture_output=True, text=True, env=env, timeout=600,
+            capture_output=True, text=True, env=env, timeout=AGENT_TIMEOUT,
         )
     except FileNotFoundError:
         print("\nERROR: claude CLI not found. Use --api flag instead.")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print(f"\nERROR: {label} exceeded --timeout {AGENT_TIMEOUT}s. "
+              "Outputs already saved in docs/audit/ are kept; re-run with --resume.")
         sys.exit(1)
     elapsed = time.time() - start
     if result.returncode != 0 or not result.stdout.strip():
@@ -329,6 +365,7 @@ def _call_agent_api(system: str, user_message: str, label: str) -> str:
     start = time.time()
     response = get_client().messages.create(
         model=MODEL,
+        timeout=AGENT_TIMEOUT,
         max_tokens=MAX_TOKENS,
         system=system,
         messages=[{"role": "user", "content": user_message}],
@@ -344,6 +381,75 @@ def call_agent(system: str, user_message: str, label: str) -> str:
     if USE_API:
         return _call_agent_api(system, user_message, label)
     return call_agent_cli(system, user_message, label)
+
+
+# ── Per-agent output persistence (--resume) ──────────────────────────────────
+
+OUTPUT_HEADER = "<!-- audit-pipeline agent={n} iteration={it} input={digest} saved={ts} -->"
+_HEADER_RE = re.compile(
+    r"^<!-- audit-pipeline agent=(\d+) iteration=(\d+) input=([0-9a-f]+) saved=[^>]* -->\n"
+)
+
+
+def agent_output_path(audit_dir: Path, n: int) -> Path:
+    return audit_dir / f"agent{n}.md"
+
+
+def save_agent_output(audit_dir: Path, n: int, iteration: int, digest: str, text: str) -> None:
+    """Persist an agent's output as soon as it finishes, so a later crash or
+    timeout does not throw away the work already paid for."""
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    header = OUTPUT_HEADER.format(
+        n=n, it=iteration, digest=digest,
+        ts=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+    )
+    agent_output_path(audit_dir, n).write_text(f"{header}\n{text}\n", encoding="utf-8")
+    print(f"  Saved {agent_output_path(audit_dir, n)}")
+
+
+def load_agent_output(audit_dir: Path, n: int, iteration: int, digest: str,
+                      allow_stale: bool = False) -> str | None:
+    """Return a saved output of the same agent and iteration, or None.
+
+    An output produced from different input (code, rules or manifest changed)
+    is only reused with allow_stale (--resume-stale); otherwise the agent re-runs.
+    """
+    path = agent_output_path(audit_dir, n)
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    match = _HEADER_RE.match(raw)
+    if not match or int(match.group(1)) != n or int(match.group(2)) != iteration:
+        return None
+    if match.group(3) != digest:
+        if not allow_stale:
+            print(f"  {path.name} was produced from different input "
+                  "(code, rules or manifest changed) — re-running this agent.")
+            return None
+        print(f"  WARNING: {path.name} was produced from different input — "
+              "reusing it anyway (--resume-stale).")
+    return raw[match.end():].strip()
+
+
+def input_digest(*parts: str) -> str:
+    h = hashlib.sha256()
+    for part in parts:
+        h.update(part.encode("utf-8", errors="replace"))
+    return h.hexdigest()[:16]
+
+
+def run_agent(n: int, system: str, user_message: str, label: str,
+              audit_dir: Path, iteration: int, digest: str, resume: bool,
+              resume_stale: bool = False) -> str:
+    """Call one agent, or reuse its saved output when resuming."""
+    if resume or resume_stale:
+        saved = load_agent_output(audit_dir, n, iteration, digest, allow_stale=resume_stale)
+        if saved is not None:
+            print(f"  {label}: reusing {agent_output_path(audit_dir, n)}")
+            return saved
+    output = call_agent(system, user_message, label)
+    save_agent_output(audit_dir, n, iteration, digest, output)
+    return output
 
 
 # ── Score parsing ─────────────────────────────────────────────────────────────
@@ -498,7 +604,8 @@ def update_session_handoff(manifest_path: Path, scores: list[int], verdict: str)
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
-def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
+def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool,
+                 resume: bool = False, resume_stale: bool = False):
     """Run the full 3-agent audit pipeline with retry loop."""
 
     # Validate environment
@@ -516,7 +623,11 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
     print(f"  Manifest: {manifest_path}")
     print(f"  Root: {root}")
     print(f"  Max iterations: {max_iterations}")
+    print(f"  Excluded prefixes: {', '.join(SKIP_PATH_PREFIXES) or '(none)'}")
+    mode = "  (resume-stale)" if resume_stale else "  (resume)" if resume else ""
+    print(f"  Agent timeout: {AGENT_TIMEOUT}s{mode}")
     print(f"{'='*60}\n")
+    audit_dir = manifest_path.parent / "audit"
 
     print("Collecting source files...")
     files = collect_files(root, manifest_path)
@@ -534,12 +645,27 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
     )
     code_block = format_files_for_prompt(files)
 
+    total_chars = sum(len(c) for c in files.values())
+    too_big = total_chars > MAX_TOTAL_CHARS
+    size_msg = (
+        f"Input is {total_chars:,} chars, above the {MAX_TOTAL_CHARS:,} limit "
+        "(--max-total-chars). This repo is too large for the one-shot pipeline: "
+        "narrow it with --exclude, or audit in agent mode (security-auditor → "
+        "parity-auditor → quality-auditor), where agents read files with tools."
+    )
+
     if dry_run:
         print("\nDRY RUN — would send the following files to agents:")
         for path in files:
             print(f"  {path}")
-        print(f"\nTotal characters: {sum(len(c) for c in files.values())}")
+        if too_big:
+            print(f"\nWARNING: {size_msg}")
+        print(f"\nTotal characters: {total_chars}")
         return
+
+    if too_big:
+        print(f"ERROR: {size_msg}")
+        sys.exit(2)
 
     history = []
     final_scores = []
@@ -553,6 +679,7 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
             # and produces noisy, non-deterministic scores.
             files = collect_files(root, manifest_path)
             code_block = format_files_for_prompt(files)
+        digest = input_digest(rules_block, manifest_content, code_block)
 
         # ── Agent 1 ──────────────────────────────────────────────────────────
         print("\nAgent 1 — Security & Architecture")
@@ -561,7 +688,8 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
-        a1_output = call_agent(AGENT_1_SYSTEM, a1_user, "Agent 1")
+        a1_output = run_agent(1, AGENT_1_SYSTEM, a1_user, "Agent 1",
+                              audit_dir, iteration, digest, resume, resume_stale)
         a1_score = parse_score(a1_output)
         print(f"  Score: {a1_score}/100")
 
@@ -575,7 +703,8 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
-        a2_output = call_agent(AGENT_2_SYSTEM, a2_user, "Agent 2")
+        a2_output = run_agent(2, AGENT_2_SYSTEM, a2_user, "Agent 2",
+                              audit_dir, iteration, digest, resume, resume_stale)
         a2_score = parse_score(a2_output)
         print(f"  Score: {a2_score}/100")
 
@@ -592,7 +721,8 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
             f"PROJECT MANIFEST:\n```\n{manifest_content}\n```\n\n"
             f"SOURCE CODE:\n{code_block}"
         )
-        a3_output = call_agent(AGENT_3_SYSTEM, a3_user, "Agent 3")
+        a3_output = run_agent(3, AGENT_3_SYSTEM, a3_user, "Agent 3",
+                              audit_dir, iteration, digest, resume, resume_stale)
         a3_score = parse_score(a3_output)
         print(f"  Score: {a3_score}/100")
 
@@ -656,7 +786,7 @@ def run_pipeline(manifest_path: Path, max_iterations: int, dry_run: bool):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    global PASS_THRESHOLD, USE_API, MAX_FILES, MAX_FILE_CHARS
+    global PASS_THRESHOLD, USE_API, MAX_FILES, MAX_FILE_CHARS, AGENT_TIMEOUT, MAX_TOTAL_CHARS
     parser = argparse.ArgumentParser(
         description="3-agent automated code audit pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -694,6 +824,19 @@ def main():
                         help=f"Max source files sent (default: {MAX_FILES})")
     parser.add_argument("--max-file-chars", type=int, default=MAX_FILE_CHARS,
                         help=f"Max chars per file (default: {MAX_FILE_CHARS})")
+    parser.add_argument("--exclude", action="append", default=[], metavar="PREFIX",
+                        help="Skip files under this root-relative path prefix "
+                             "(repeatable; added to: " + ", ".join(SKIP_PATH_PREFIXES) + ")")
+    parser.add_argument("--timeout", type=int, default=AGENT_TIMEOUT,
+                        help=f"Seconds per agent call (default: {AGENT_TIMEOUT})")
+    parser.add_argument("--resume", action="store_true",
+                        help="Reuse docs/audit/agentN.md outputs saved for the same "
+                             "iteration when the input is unchanged; re-run the rest")
+    parser.add_argument("--resume-stale", action="store_true",
+                        help="Like --resume, but also reuse outputs produced from "
+                             "different input (warns)")
+    parser.add_argument("--max-total-chars", type=int, default=MAX_TOTAL_CHARS,
+                        help=f"Refuse to run above this input size (default: {MAX_TOTAL_CHARS})")
 
     args = parser.parse_args()
 
@@ -701,6 +844,11 @@ def main():
     USE_API = args.api
     MAX_FILES = args.max_files
     MAX_FILE_CHARS = args.max_file_chars
+    AGENT_TIMEOUT = args.timeout
+    MAX_TOTAL_CHARS = args.max_total_chars
+    SKIP_PATH_PREFIXES.extend(
+        pref.strip("/") + "/" for pref in args.exclude if pref.strip("/")
+    )
 
     manifest_path = Path(args.manifest)
     if not manifest_path.exists() and not args.dry_run:
@@ -712,6 +860,8 @@ def main():
         manifest_path=manifest_path,
         max_iterations=args.max_iter,
         dry_run=args.dry_run,
+        resume=args.resume,
+        resume_stale=args.resume_stale,
     )
 
 

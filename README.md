@@ -150,8 +150,31 @@ audit --score           # print last result, no API calls
 audit --dry-run         # list files that would be sent (+ omitted ones)
 audit --threshold 90    # stricter pass bar (default: 85)
 audit --max-iter 2      # pause for fixes, then re-audit fresh code
-audit --max-files 200   # raise the file budget for large repos
+audit --max-files 200   # raise the file budget
+audit --exclude docs/archive/   # skip more path prefixes (repeatable)
+audit --timeout 2400    # seconds per agent call (default: 1800)
+audit --resume          # reuse docs/audit/agentN.md when the input is unchanged
+audit --resume-stale    # reuse them even if the input changed (warns)
+audit --regen-manifest  # regenerate docs/PROJECT_MANIFEST.md first (off by default)
 ```
+
+Each agent's output is saved to `docs/audit/agentN.md` as soon as it finishes, so a
+timeout or usage limit does not lose the work already done.
+
+**Default exclusions:** `node_modules`, build output and `vendor`/`third_party` dirs anywhere,
+plus the path prefixes `frontend/src/components/ui/` and `src/components/ui/` (vendored
+shadcn/ui), `backend/scripts/`, `scripts/`, `docs/` and `.claude/`.
+
+### Pipeline vs agent mode: which one to use
+
+| Mode | How it works | Use it for |
+|------|--------------|------------|
+| **Pipeline** (`audit`) | Sends the whole codebase to each of the 3 agents in one prompt | **Small projects**: collected input ≤ 250k chars (`audit --dry-run` shows the total) |
+| **Agent mode** | Main Claude Code session runs `security-auditor` → `parity-auditor` → `quality-auditor` with the Task tool; each agent reads files with tools (grep, read) and writes `docs/audit/agentN.md` | **Large repos**: anything the pipeline refuses |
+
+Above 250k chars the pipeline refuses to run (`--max-total-chars` to override). One-shot
+prompts that large time out or hit usage limits, and the agents skim rather than read.
+In agent mode, commit after each agent so an interrupted audit resumes from the last saved output.
 
 ---
 

@@ -109,9 +109,17 @@ When version is done, orchestrator updates SESSION_HANDOFF.md on disk.
 ### PHASE C — AUDIT (terminal)
 
 ```zsh
+audit --dry-run          # check the input size first
 audit                    # runs 3 agents (+ docs/AUDIT_PROMPTS.md rules), writes docs/AUDIT_REPORT.md
 audit --score            # check result
+audit --resume           # after a timeout or usage limit: skip agents already saved in docs/audit/
 ```
+
+**Small project vs large repo:** the `audit` pipeline sends the whole codebase to every
+agent and refuses to run above 250k chars. For larger repos use **agent mode**: in the
+main Claude Code session, run `security-auditor` → `parity-auditor` → `quality-auditor`
+one after another with the Task tool. Each agent reads the code with tools and writes
+`docs/audit/agentN.md`; the last one writes `docs/AUDIT_REPORT.md`. Commit after each agent.
 
 **Score ≥ 85 → PASS → go to Phase D**
 
